@@ -10,11 +10,11 @@ DASHSCOPE_MODEL = "glm-4.6"
 
 
 def build_primary_agent_client():
-    from openai import OpenAI
-
     api_key = os.getenv("DASHSCOPE_API_KEY")
     if not api_key:
         raise RuntimeError("DASHSCOPE_API_KEY is not set")
+    from openai import OpenAI
+
     return OpenAI(api_key=api_key, base_url=DASHSCOPE_BASE_URL)
 
 
@@ -45,6 +45,14 @@ def _normalize_count(value) -> int | None:
     return None
 
 
+def _normalize_slot_value(key: str, value):
+    if key in {"platform", "brand"}:
+        return _clean_text(value)
+    if key == "count":
+        return _normalize_count(value)
+    return value
+
+
 def _infer_slot_updates_from_messages(messages) -> dict:
     user_text = " ".join(message.content for message in messages if getattr(message, "role", "") == "user")
     if not user_text:
@@ -61,7 +69,7 @@ def _infer_slot_updates_from_messages(messages) -> dict:
         if brand and brand not in {"竞品", "商品", "分析", "平台"}:
             updates["brand"] = brand
 
-    count_match = re.search(r"(\d+)\s*(?:个|件|款)?", user_text)
+    count_match = re.search(r"(?<!\d)(\d+)\s*(?:个|件|款)", user_text)
     if count_match:
         updates["count"] = int(count_match.group(1))
 
@@ -74,8 +82,9 @@ def _merge_slot_updates(messages, slots, decision_updates) -> dict:
     merged = {k: v for k, v in _slot_state_from_slots(slots).items() if v is not None}
     merged.update(_infer_slot_updates_from_messages(messages))
     for key, value in decision_updates.items():
-        if value not in (None, ""):
-            merged[key] = value
+        normalized_value = _normalize_slot_value(key, value)
+        if normalized_value not in (None, ""):
+            merged[key] = normalized_value
     return merged
 
 

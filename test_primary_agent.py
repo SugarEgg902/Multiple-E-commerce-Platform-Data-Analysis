@@ -1,6 +1,8 @@
 import importlib
 import sys
 
+import pytest
+
 from primary_agent import (
     DASHSCOPE_BASE_URL,
     DASHSCOPE_MODEL,
@@ -20,6 +22,14 @@ def test_build_primary_agent_client_requires_dashscope_api_key(monkeypatch):
         assert "DASHSCOPE_API_KEY" in str(exc)
     else:
         raise AssertionError("RuntimeError was not raised")
+
+
+def test_build_primary_agent_client_raises_runtime_error_before_openai_import_failure(monkeypatch):
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.setitem(sys.modules, "openai", None)
+
+    with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
+        build_primary_agent_client()
 
 
 def test_primary_agent_constants_match_dashscope_configuration():
@@ -150,6 +160,40 @@ def test_decide_next_step_preserves_and_infers_assistant_slot_updates():
         "message": "我先确认一下品牌和数量。",
         "slot_updates": {"brand": "Blackview", "platform": "amazon", "count": 5},
     }
+
+
+@pytest.mark.parametrize(
+    ("user_content", "expected_brand"),
+    [
+        ("看 Amazon 的 iPhone 16，5 个", "Blackview"),
+        ("看 Amazon 的 Blackview BV9300，5 个", "Blackview"),
+    ],
+)
+def test_decide_next_step_normalizes_incoming_slot_updates_for_quantity_examples(
+    user_content, expected_brand
+):
+    def fake_llm(_messages, _tools):
+        return {
+            "type": "assistant",
+            "message": "我先确认一下品牌和数量。",
+            "slot_updates": {"brand": " Blackview ", "count": "5"},
+        }
+
+    decision = decide_next_step(
+        messages=[ChatMessage(role="user", content=user_content)],
+        slots=SessionSlots(),
+        tool_schemas=[
+            {
+                "type": "function",
+                "function": {"name": "run_amazon_competitor_analysis"},
+            }
+        ],
+        llm_call=fake_llm,
+    )
+
+    assert decision["slot_updates"]["brand"] == expected_brand
+    assert decision["slot_updates"]["count"] == 5
+    assert decision["slot_updates"]["platform"] == "amazon"
 
 
 def test_decide_next_step_rejects_unsupported_tool_call():
