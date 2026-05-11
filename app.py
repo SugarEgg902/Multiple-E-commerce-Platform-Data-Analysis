@@ -11,11 +11,12 @@ from pydantic import BaseModel
 
 from agent_service import RUNS, discard_run, get_session_payload, new_run, new_session, run_session_message
 from artifacts import ARTIFACTS_DIR
+from session_store import ConcurrentRunError
 
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "frontend"
-TERMINAL_EVENT_TYPES = {"done", "error"}
+TERMINAL_EVENT_TYPES = {"done"}
 
 
 class MessageRequest(BaseModel):
@@ -40,15 +41,36 @@ def build_run_event_stream(run_id: str, run, runs: dict, discard_run_fn=discard_
         try:
             while True:
                 payload = await run.queue.get()
+                terminal_reached = payload.get("type") in TERMINAL_EVENT_TYPES
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                if payload.get("type") in TERMINAL_EVENT_TYPES:
-                    terminal_reached = True
+                if terminal_reached:
                     break
         finally:
             if terminal_reached:
                 discard_run_fn(run_id, runs=runs)
 
     return event_stream()
+
+
+def schedule_run_cleanup(run_id: str, runs: dict, delay_seconds: float = 60.0, discard_run_fn=discard_run) -> None:
+    async def cleanup():
+        await asyncio.sleep(delay_seconds)
+        discard_run_fn(run_id, runs=runs)
+
+    asyncio.create_task(cleanup())
+
+
+async def run_session_message_with_cleanup(
+    session_id: str,
+    run,
+    runs: dict,
+    run_session_message_fn,
+    cleanup_scheduler,
+) -> None:
+    try:
+        await run_session_message_fn(session_id, run.run_id, run.queue)
+    finally:
+        cleanup_scheduler(run.run_id, runs)
 
 
 def create_app(
@@ -61,6 +83,7 @@ def create_app(
     new_run_fn=new_run,
     run_session_message_fn=run_session_message,
     discard_run_fn=discard_run,
+    cleanup_scheduler=schedule_run_cleanup,
 ):
     app = FastAPI()
     app.mount(
@@ -94,8 +117,18 @@ def create_app(
             run = new_run_fn(session_id, request.message)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
+        except ConcurrentRunError as exc:
+            raise HTTPException(status_code=409, detail="Session already has an active run") from exc
 
-        asyncio.create_task(run_session_message_fn(session_id, run.run_id, run.queue))
+        asyncio.create_task(
+            run_session_message_with_cleanup(
+                session_id,
+                run,
+                runs,
+                run_session_message_fn,
+                cleanup_scheduler,
+            )
+        )
         return {"session_id": session_id, "run_id": run.run_id}
 
     @app.get("/api/sessions/{session_id}/runs/{run_id}/stream")
