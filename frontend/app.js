@@ -105,7 +105,7 @@
 
       renderPayload(payload);
 
-      if (payload.type === "done" || payload.type === "error") {
+      if (payload.type === "done") {
         finalizeStream(source);
       }
     };

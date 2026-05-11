@@ -36,6 +36,13 @@ def test_frontend_script_handles_mixed_agent_event_types():
     assert 'type === "done"' in script
 
 
+def test_frontend_script_only_finalizes_stream_on_done_payload():
+    script = Path("frontend/app.js").read_text(encoding="utf-8")
+
+    assert 'if (payload.type === "done") {' in script
+    assert 'if (payload.type === "done" || payload.type === "error") {' not in script
+
+
 def test_index_page_uses_multi_turn_example_copy():
     html = Path("frontend/index.html").read_text(encoding="utf-8")
 
