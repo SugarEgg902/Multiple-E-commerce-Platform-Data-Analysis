@@ -2,7 +2,15 @@ import asyncio
 
 import pytest
 
-from agent_service import RUNS, build_artifact_event, new_run, new_session, run_session_message
+from agent_service import (
+    EventQueue,
+    RUNS,
+    build_artifact_event,
+    discard_run,
+    new_run,
+    new_session,
+    run_session_message,
+)
 from session_store import ConcurrentRunError, SessionStore
 
 
@@ -86,10 +94,57 @@ def test_new_run_rolls_back_active_run_if_queue_creation_fails():
     assert runs == {}
 
 
+def test_event_queue_supports_async_get():
+    queue = EventQueue()
+
+    async def exercise():
+        producer = asyncio.create_task(queue.put({"type": "assistant", "message": "hello"}))
+        item = await queue.get()
+        await producer
+        return item
+
+    assert asyncio.run(exercise()) == {"type": "assistant", "message": "hello"}
+    assert queue.empty()
+
+
+def test_event_queue_put_skips_cancelled_waiter_and_wakes_next_live_waiter():
+    queue = EventQueue()
+
+    async def exercise():
+        cancelled_waiter = asyncio.create_task(queue.get())
+        live_waiter = asyncio.create_task(queue.get())
+        await asyncio.sleep(0)
+        cancelled_waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_waiter
+        await queue.put({"type": "assistant", "message": "hello"})
+        return await asyncio.wait_for(live_waiter, timeout=0.1)
+
+    assert asyncio.run(exercise()) == {"type": "assistant", "message": "hello"}
+    assert queue.empty()
+
+
+def test_event_queue_cleans_up_cancelled_waiter_without_future_put():
+    queue = EventQueue()
+
+    async def exercise():
+        waiter = asyncio.create_task(queue.get())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+    asyncio.run(exercise())
+
+    assert list(queue._waiters) == []
+    assert queue.empty()
+
+
 def test_run_session_message_emits_follow_up_assistant_and_done():
     store = SessionStore()
     session = store.create_session()
-    run = new_run(session.session_id, "帮我看一下 Blackview 的竞品", session_store=store, runs={})
+    runs = {}
+    run = new_run(session.session_id, "帮我看一下 Blackview 的竞品", session_store=store, runs=runs)
 
     def fake_decide(messages, slots, tool_schemas):
         del messages, slots, tool_schemas
@@ -108,7 +163,7 @@ def test_run_session_message_emits_follow_up_assistant_and_done():
             workflow_registry=None,
             decide_next_step_fn=fake_decide,
             summarize_result_fn=lambda tool_name, tool_result: "",
-            runs={},
+            runs=runs,
         )
     )
 
@@ -118,8 +173,10 @@ def test_run_session_message_emits_follow_up_assistant_and_done():
         {"type": "done"},
     ]
     saved = store.get_session(session.session_id)
+    assert saved.active_run_id is None
     assert saved.slots.brand == "Blackview"
     assert saved.messages[-1].content == "你想分析哪个平台？目前我支持 Amazon。"
+    assert runs[run.run_id] is run
 
 
 def test_run_session_message_emits_error_and_cleans_up_on_tool_failure():
@@ -167,10 +224,22 @@ def test_run_session_message_emits_error_and_cleans_up_on_tool_failure():
     assert queued == [
         {"type": "assistant", "message": "好的，我开始分析 Amazon 上的 Blackview 竞品。"},
         {"type": "error", "message": "任务执行失败: workflow boom"},
+        {"type": "done"},
     ]
     saved = store.get_session(session.session_id)
     assert saved.active_run_id is None
-    assert run.run_id not in runs
+    assert runs[run.run_id] is run
+
+
+def test_discard_run_removes_completed_run_from_registry():
+    store = SessionStore()
+    session = store.create_session()
+    runs = {}
+    run = new_run(session.session_id, "帮我看一下 Blackview 的竞品", session_store=store, runs=runs)
+
+    discard_run(run.run_id, runs=runs)
+
+    assert runs == {}
 
 
 def test_run_session_message_emits_artifact_and_final_summary():

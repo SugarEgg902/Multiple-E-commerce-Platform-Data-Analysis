@@ -17,9 +17,30 @@ RUNS: dict[str, "AgentRun"] = {}
 class EventQueue:
     def __init__(self):
         self._items = deque()
+        self._waiters = deque()
 
     async def put(self, payload: dict) -> None:
+        while self._waiters:
+            waiter = self._waiters.popleft()
+            if not waiter.done():
+                waiter.set_result(payload)
+                return
         self._items.append(payload)
+
+    async def get(self) -> dict:
+        if self._items:
+            return self._items.popleft()
+
+        loop = asyncio.get_running_loop()
+        waiter = loop.create_future()
+        self._waiters.append(waiter)
+        try:
+            return await waiter
+        finally:
+            try:
+                self._waiters.remove(waiter)
+            except ValueError:
+                pass
 
     def get_nowait(self) -> dict:
         if not self._items:
@@ -75,7 +96,11 @@ def new_run(
         raise
 
 
-async def emit_event(queue: asyncio.Queue, payload: dict) -> None:
+def discard_run(run_id: str, *, runs: dict[str, AgentRun] = RUNS) -> None:
+    runs.pop(run_id, None)
+
+
+async def emit_event(queue: EventQueue, payload: dict) -> None:
     await queue.put(payload)
 
 
@@ -142,6 +167,6 @@ async def run_session_message(
             await emit_event(queue, {"type": "done"})
         except Exception as exc:
             await emit_event(queue, build_error_event(f"任务执行失败: {exc}"))
+            await emit_event(queue, {"type": "done"})
     finally:
         session_store.finish_run(session_id, run_id)
-        runs.pop(run_id, None)
