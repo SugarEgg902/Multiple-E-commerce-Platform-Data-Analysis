@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import uuid
 from dataclasses import dataclass, field
 
@@ -39,10 +40,13 @@ class SessionStore:
         return session
 
     def get_session(self, session_id: str) -> ChatSession:
+        return deepcopy(self._sessions[session_id])
+
+    def _get_live_session(self, session_id: str) -> ChatSession:
         return self._sessions[session_id]
 
     def append_message(self, session_id: str, role: str, content: str) -> ChatMessage:
-        session = self.get_session(session_id)
+        session = self._get_live_session(session_id)
         message = ChatMessage(role=role, content=content)
         session.messages.append(message)
         return message
@@ -55,7 +59,7 @@ class SessionStore:
         brand: str | None = None,
         count: int | None = None,
     ) -> SessionSlots:
-        session = self.get_session(session_id)
+        session = self._get_live_session(session_id)
         if platform is not None:
             session.slots.platform = platform
         if brand is not None:
@@ -65,7 +69,7 @@ class SessionStore:
         return session.slots
 
     def start_run(self, session_id: str) -> str:
-        session = self.get_session(session_id)
+        session = self._get_live_session(session_id)
         if session.active_run_id is not None:
             raise ConcurrentRunError(f"session {session_id} already active: {session.active_run_id}")
 
@@ -74,6 +78,6 @@ class SessionStore:
         return run_id
 
     def finish_run(self, session_id: str, run_id: str) -> None:
-        session = self.get_session(session_id)
+        session = self._get_live_session(session_id)
         if session.active_run_id == run_id:
             session.active_run_id = None
