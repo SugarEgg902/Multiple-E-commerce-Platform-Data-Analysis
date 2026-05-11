@@ -12,21 +12,21 @@
       <section class="composer-panel">
         <div class="panel-heading">
           <h2>发起分析</h2>
-          <p>示例：从亚马逊获取 Blackview 5 个竞品分析</p>
+          <p>示例：帮我看一下 Blackview 的竞品，然后补充 Amazon 和数量。</p>
         </div>
 
         <form id="chat-form" class="composer" novalidate>
-          <label class="composer-label" for="message-input">任务内容</label>
+          <label class="composer-label" for="message-input">对话内容</label>
           <textarea
             id="message-input"
             name="message"
             rows="4"
-            placeholder="从亚马逊获取 Blackview 5 个竞品分析"
+            placeholder="帮我看一下 Blackview 的竞品"
             required
-          >从亚马逊获取 Blackview 5 个竞品分析</textarea>
+          ></textarea>
           <div class="composer-actions">
-            <p id="form-status" class="form-status" aria-live="polite">等待新任务。</p>
-            <button id="submit-button" type="submit">开始分析</button>
+            <p id="form-status" class="form-status" aria-live="polite">正在创建会话...</p>
+            <button id="submit-button" type="submit">发送消息</button>
           </div>
         </form>
       </section>

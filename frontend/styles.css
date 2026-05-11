@@ -205,6 +205,7 @@ textarea:focus {
 
 .form-status {
   margin: 0;
+  min-height: 1.5rem;
   font-size: 0.94rem;
 }
 
@@ -278,8 +279,28 @@ textarea:disabled {
 }
 
 .message-role {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
   font-size: 0.7rem;
   color: var(--accent);
+}
+
+.message.assistant .message-role {
+  background: #e9f2ff;
+}
+
+.message.status .message-role {
+  background: #fff4d6;
+}
+
+.message.result .message-role {
+  background: #e7f8ee;
+}
+
+.message.error .message-role {
+  background: #ffe8e6;
 }
 
 .message-title {

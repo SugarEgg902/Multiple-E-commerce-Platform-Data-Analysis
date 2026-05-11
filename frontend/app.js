@@ -8,28 +8,33 @@
   const messageList = document.getElementById("message-list");
 
   let activeSource = null;
+  let sessionId = null;
+
+  submitButton.disabled = true;
+  bootstrapSession();
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     const message = input.value.trim();
     if (!message) {
-      updateFormState("请输入任务内容。", false);
+      updateFormState("请输入对话内容。", false);
       input.focus();
       return;
     }
 
-    if (activeSource) {
-      activeSource.close();
-      activeSource = null;
+    if (!sessionId) {
+      updateFormState("会话尚未创建完成。", true);
+      return;
     }
 
-    setSubmitting(true);
-    updateFormState("正在创建任务...", true);
+    closeActiveSource();
     appendUserMessage(message);
+    setSubmitting(true);
+    updateFormState("正在发送消息...", true);
 
     try {
-      const response = await fetch("/api/chat", {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -38,29 +43,58 @@
       });
 
       if (!response.ok) {
-        throw new Error("任务创建失败");
+        throw new Error("消息发送失败");
       }
 
       const payload = await response.json();
-      if (!payload.task_id) {
-        throw new Error("响应缺少 task_id");
+      if (!payload.session_id || !payload.run_id) {
+        throw new Error("响应缺少会话或运行标识");
       }
 
-      updateFormState(`任务已创建：${payload.task_id}`, true);
-      openStream(payload.task_id);
+      sessionId = payload.session_id;
+      input.value = "";
+      openStream(payload.session_id, payload.run_id);
     } catch (error) {
-      setSubmitting(false);
       appendAssistantMessage({
-        title: "Request Error",
+        title: "Error",
         body: getErrorMessage(error),
         tone: "error",
       });
-      updateFormState("任务创建失败。", false);
+      updateFormState("消息发送失败。", false);
+      setSubmitting(false);
     }
   });
 
-  function openStream(taskId) {
-    const source = new EventSource(`/api/chat/${encodeURIComponent(taskId)}/stream`);
+  async function bootstrapSession() {
+    updateFormState("正在创建会话...", true);
+
+    try {
+      const response = await fetch("/api/sessions", {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw new Error("会话创建失败");
+      }
+
+      const payload = await response.json();
+      if (!payload.session_id) {
+        throw new Error("响应缺少 session_id");
+      }
+
+      sessionId = payload.session_id;
+      submitButton.disabled = false;
+      updateFormState(`会话已创建：${sessionId}`, false);
+    } catch (error) {
+      submitButton.disabled = true;
+      updateFormState(getErrorMessage(error), false);
+    }
+  }
+
+  function openStream(currentSessionId, runId) {
+    const source = new EventSource(
+      `/api/sessions/${encodeURIComponent(currentSessionId)}/runs/${encodeURIComponent(runId)}/stream`
+    );
     activeSource = source;
 
     source.onmessage = (event) => {
@@ -71,8 +105,8 @@
 
       renderPayload(payload);
 
-      if (isTerminalPayload(payload)) {
-        finalizeStream();
+      if (payload.type === "done" || payload.type === "error") {
+        finalizeStream(source);
       }
     };
 
@@ -86,51 +120,38 @@
         body: "事件流已中断，请稍后重试。",
         tone: "error",
       });
-      updateFormState("事件流中断。", false);
-      finalizeStream();
+      finalizeStream(source);
+      updateFormState("事件流已中断，请稍后重试。", false);
     };
   }
 
   function renderPayload(payload) {
     const type = payload.type;
 
-    if (type === "status") {
+    if (type === "assistant") {
+      appendAssistantMessage({
+        title: "Assistant",
+        body: payload.message || "",
+        tone: "assistant",
+      });
+      updateFormState(payload.message || "等待下一条消息。", false);
+      return;
+    }
+
+    if (type === "tool_status") {
       appendAssistantMessage({
         title: "Status",
-        body: payload.message || "任务状态已更新。",
+        body: payload.message || "工具执行中。",
         tone: "status",
       });
-      updateFormState(payload.message || "任务进行中...", true);
+      updateFormState(payload.message || "工具执行中。", true);
       return;
     }
 
-    if (type === "item") {
-      const lines = [];
-      if (payload.asin) {
-        lines.push(`ASIN: ${payload.asin}`);
-      }
-      if (payload.title) {
-        lines.push(`标题: ${payload.title}`);
-      }
-
-      const itemMessage = appendAssistantMessage({
-        title: "Item Complete",
-        body: lines.join("\n") || "单个竞品分析已完成。",
-        tone: "item",
-      });
-
-      if (payload.row && typeof payload.row === "object") {
-        itemMessage.appendChild(buildKeyValueList(payload.row));
-      }
-
-      updateFormState("已收到单项分析结果。", true);
-      return;
-    }
-
-    if (type === "result") {
+    if (type === "artifact") {
       const resultMessage = appendAssistantMessage({
-        title: "Result",
-        body: payload.summary || "任务已完成。",
+        title: "Artifact",
+        body: payload.summary || "结果已生成。",
         tone: "result",
       });
 
@@ -141,8 +162,6 @@
       if (Array.isArray(payload.preview_columns) && Array.isArray(payload.preview_rows)) {
         resultMessage.appendChild(buildPreviewTable(payload.preview_columns, payload.preview_rows));
       }
-
-      updateFormState(payload.summary || "任务已完成。", false);
       return;
     }
 
@@ -156,11 +175,10 @@
       return;
     }
 
-    appendAssistantMessage({
-      title: "Message",
-      body: JSON.stringify(payload),
-      tone: "status",
-    });
+    if (type === "done") {
+      updateFormState("等待下一条消息。", false);
+      return;
+    }
   }
 
   function appendUserMessage(text) {
@@ -272,29 +290,6 @@
     return section;
   }
 
-  function buildKeyValueList(row) {
-    const fields = ["品牌", "ASIN", "商品标题", "价格", "评分", "评论数", "竞品定位"];
-    const list = document.createElement("dl");
-    list.className = "row-summary";
-
-    fields.forEach((field) => {
-      if (!(field in row)) {
-        return;
-      }
-
-      const term = document.createElement("dt");
-      term.textContent = field;
-
-      const detail = document.createElement("dd");
-      detail.textContent = row[field] == null ? "" : String(row[field]);
-
-      list.appendChild(term);
-      list.appendChild(detail);
-    });
-
-    return list;
-  }
-
   function parsePayload(raw) {
     try {
       return JSON.parse(raw);
@@ -308,16 +303,19 @@
     }
   }
 
-  function finalizeStream() {
+  function closeActiveSource() {
     if (activeSource) {
       activeSource.close();
       activeSource = null;
     }
-    setSubmitting(false);
   }
 
-  function isTerminalPayload(payload) {
-    return payload.type === "result" || payload.type === "error";
+  function finalizeStream(source) {
+    if (activeSource === source) {
+      source.close();
+      activeSource = null;
+    }
+    setSubmitting(false);
   }
 
   function setSubmitting(isSubmitting) {
