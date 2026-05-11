@@ -1,142 +1,114 @@
 from __future__ import annotations
 
 import asyncio
-import re
-import uuid
 from dataclasses import dataclass
-from pathlib import Path
 
-from amazon_tools import scrape_amazon_products, summarize_reviews
-from analysis_tools import build_analysis_row
-from artifacts import CSV_COLUMNS, write_analysis_csv
+from primary_agent import decide_next_step, summarize_workflow_result
+from session_store import SessionStore
+from workflow_registry import build_default_registry
 
-TASKS: dict[str, "AgentTask"] = {}
+
+SESSION_STORE = SessionStore()
+WORKFLOW_REGISTRY = build_default_registry()
+RUNS: dict[str, "AgentRun"] = {}
 
 
 @dataclass
-class AgentTask:
-    task_id: str
-    message: str
+class AgentRun:
+    run_id: str
+    session_id: str
     queue: asyncio.Queue
 
 
-def parse_competitor_request(message: str) -> dict | None:
-    text = (message or "").strip()
-    if "亚马逊" not in text:
-        return None
+def new_session(*, session_store: SessionStore = SESSION_STORE):
+    return session_store.create_session()
 
-    match = re.fullmatch(r"从亚马逊获取\s*(.+?)\s+(\d+)\s*个竞品分析", text)
-    if not match:
-        return None
 
-    brand = match.group(1).strip()
-    count = int(match.group(2))
-    if not brand or count <= 0:
-        return None
-
+def get_session_payload(session_id: str, *, session_store: SessionStore = SESSION_STORE) -> dict:
+    session = session_store.get_session(session_id)
     return {
-        "platform": "amazon",
-        "brand": brand,
-        "count": count,
+        "session_id": session.session_id,
+        "messages": [{"role": message.role, "content": message.content} for message in session.messages],
+        "slots": {
+            "platform": session.slots.platform,
+            "brand": session.slots.brand,
+            "count": session.slots.count,
+        },
+        "active_run_id": session.active_run_id,
     }
 
 
-def new_task(message: str) -> AgentTask:
-    task = AgentTask(
-        task_id=uuid.uuid4().hex,
-        message=message,
-        queue=asyncio.Queue(),
-    )
-    TASKS[task.task_id] = task
-    return task
+def new_run(
+    session_id: str,
+    message: str,
+    *,
+    session_store: SessionStore = SESSION_STORE,
+    runs: dict[str, AgentRun] = RUNS,
+) -> AgentRun:
+    session_store.append_message(session_id, "user", message)
+    run_id = session_store.start_run(session_id)
+    run = AgentRun(run_id=run_id, session_id=session_id, queue=asyncio.Queue())
+    runs[run.run_id] = run
+    return run
 
 
 async def emit_event(queue: asyncio.Queue, payload: dict) -> None:
     await queue.put(payload)
 
 
-def _build_download_url(path: Path) -> str:
-    return f"/api/download/{path.name}"
+def build_artifact_event(result: dict) -> dict:
+    return {
+        "type": "artifact",
+        "artifact_type": "csv_preview",
+        "summary": result["summary"],
+        "preview_columns": result["preview_columns"],
+        "preview_rows": result["preview_rows"],
+        "filename": result["filename"],
+        "download_url": result["download_url"],
+    }
 
 
-async def run_task(message: str, queue: asyncio.Queue) -> None:
-    parsed = parse_competitor_request(message)
-    if parsed is None:
-        await emit_event(
-            queue,
-            {
-                "type": "error",
-                "message": "请输入品牌和数量，例如：从亚马逊获取 Blackview 5 个竞品分析",
-            },
-        )
-        return
-
-    brand = parsed["brand"]
-    count = parsed["count"]
-
-    await emit_event(queue, {"type": "status", "message": "正在抓取 Amazon 商品..."})
+async def run_session_message(
+    session_id: str,
+    run_id: str,
+    queue: asyncio.Queue,
+    *,
+    session_store: SessionStore = SESSION_STORE,
+    workflow_registry=WORKFLOW_REGISTRY,
+    decide_next_step_fn=decide_next_step,
+    summarize_result_fn=summarize_workflow_result,
+    runs: dict[str, AgentRun] = RUNS,
+) -> None:
     try:
-        products = await scrape_amazon_products(brand, max_valid=count)
-    except Exception as exc:
-        await emit_event(queue, {"type": "error", "message": f"抓取商品失败: {exc}"})
-        return
+        session = session_store.get_session(session_id)
+        tool_schemas = workflow_registry.get_tool_schemas() if workflow_registry is not None else []
+        decision = decide_next_step_fn(session.messages, session.slots, tool_schemas)
 
-    if not products:
-        await emit_event(queue, {"type": "error", "message": "没有抓取到有效商品"})
-        return
+        slot_updates = decision.get("slot_updates", {})
+        session_store.update_slots(session_id, **slot_updates)
 
-    rows: list[dict] = []
-    for product in products:
-        asin = product.get("asin", "")
-        await emit_event(queue, {"type": "status", "message": f"正在分析 {asin} ..."})
+        if decision["type"] == "assistant":
+            session_store.append_message(session_id, "assistant", decision["message"])
+            await emit_event(queue, {"type": "assistant", "message": decision["message"]})
+            await emit_event(queue, {"type": "done"})
+            return
 
-        review_summary: dict
-        try:
-            review_summary = await summarize_reviews(asin)
-        except Exception as exc:
-            await emit_event(queue, {"type": "status", "message": f"{asin} 评论摘要失败: {exc}"})
-            review_summary = {"pros": [], "cons": [], "overall": ""}
+        if decision.get("assistant_message"):
+            session_store.append_message(session_id, "assistant", decision["assistant_message"])
+            await emit_event(queue, {"type": "assistant", "message": decision["assistant_message"]})
 
-        try:
-            row = await asyncio.to_thread(
-                build_analysis_row,
-                brand=brand,
-                product=product,
-                review_summary=review_summary,
-            )
-        except Exception as exc:
-            await emit_event(queue, {"type": "status", "message": f"{asin} 分析生成失败: {exc}"})
-            continue
-
-        rows.append(row)
-        await emit_event(
-            queue,
-            {
-                "type": "item",
-                "asin": asin,
-                "title": product.get("title", ""),
-                "row": row,
-            },
+        result = await workflow_registry.call_tool(
+            decision["tool_name"],
+            decision["arguments"],
+            lambda payload: emit_event(queue, payload),
         )
+        artifact_event = build_artifact_event(result)
+        await emit_event(queue, artifact_event)
 
-    if not rows:
-        await emit_event(queue, {"type": "error", "message": "没有生成有效竞品分析结果"})
-        return
-
-    try:
-        csv_path = write_analysis_csv(rows, brand=brand, count=count)
-    except Exception as exc:
-        await emit_event(queue, {"type": "error", "message": f"写入 CSV 失败: {exc}"})
-        return
-
-    await emit_event(
-        queue,
-        {
-            "type": "result",
-            "summary": f"已完成 {len(rows)} 个竞品分析",
-            "preview_columns": CSV_COLUMNS,
-            "preview_rows": [[row.get(column, "") for column in CSV_COLUMNS] for row in rows],
-            "download_url": _build_download_url(csv_path),
-            "filename": csv_path.name,
-        },
-    )
+        final_message = summarize_result_fn(decision["tool_name"], result)
+        session_store.append_message(session_id, "assistant", final_message)
+        await emit_event(queue, {"type": "assistant", "message": final_message})
+        await emit_event(queue, {"type": "done"})
+    finally:
+        session_store.finish_run(session_id, run_id)
+        runs.pop(run_id, None)
