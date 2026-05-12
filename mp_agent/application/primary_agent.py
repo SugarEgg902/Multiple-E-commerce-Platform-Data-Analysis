@@ -55,6 +55,9 @@ def _normalize_slot_value(key: str, value):
             "amazon": "amazon",
             "amazon.com": "amazon",
             "亚马逊": "amazon",
+            "ebay": "ebay",
+            "ebay.com": "ebay",
+            "易贝": "ebay",
             "temu": "temu",
         }
         return platform_aliases.get(compact, compact)
@@ -174,6 +177,14 @@ def _build_slot_extraction_messages(messages: list[dict]) -> list[dict]:
     return [{"role": "system", "content": system_prompt}, *messages[1:]]
 
 
+def _is_complete_ebay_slot_state(slot_state: dict) -> bool:
+    return (
+        _clean_text(slot_state.get("platform")) == "ebay"
+        and _clean_text(slot_state.get("brand")) is not None
+        and _normalize_count(slot_state.get("count")) is not None
+    )
+
+
 def _is_complete_amazon_slot_state(slot_state: dict) -> bool:
     return (
         _clean_text(slot_state.get("platform")) == "amazon"
@@ -210,6 +221,18 @@ def _default_llm_call(messages: list[dict], tools: list[dict]) -> dict:
         return {
             "type": "tool_call",
             "tool_name": "run_amazon_competitor_analysis",
+            "arguments": {
+                "brand": _clean_text(merged_slot_updates.get("brand")),
+                "count": _normalize_count(merged_slot_updates.get("count")),
+            },
+            "assistant_message": "",
+            "slot_updates": merged_slot_updates,
+        }
+
+    if _is_complete_ebay_slot_state(merged_slot_updates):
+        return {
+            "type": "tool_call",
+            "tool_name": "run_ebay_competitor_analysis",
             "arguments": {
                 "brand": _clean_text(merged_slot_updates.get("brand")),
                 "count": _normalize_count(merged_slot_updates.get("count")),

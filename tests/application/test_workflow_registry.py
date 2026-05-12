@@ -43,9 +43,9 @@ def test_default_registry_exposes_amazon_workflow_schema():
     registry = build_default_registry()
 
     schemas = registry.get_tool_schemas()
+    names = [s["function"]["name"] for s in schemas]
 
-    assert len(schemas) == 1
-    assert schemas[0]["function"]["name"] == "run_amazon_competitor_analysis"
+    assert "run_amazon_competitor_analysis" in names
 
 
 def test_default_registry_dispatches_to_amazon_workflow(monkeypatch):
