@@ -6,7 +6,7 @@ import os
 import re
 from datetime import datetime
 
-APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "apify_api_gVcg3a3TfXLLX1NSDSrBxGL67AAccx3qK1Su")
+APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
 APIFY_TEMU_ACTOR = "LTBzVVq592mKgR6lU"
 
 LLM_BASE_URL = "http://10.0.0.21:8000/v1"
