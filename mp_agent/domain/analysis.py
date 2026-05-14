@@ -99,8 +99,9 @@ def build_analysis_row(brand: str, product: dict, review_summary: dict, llm_call
     category = _stringify(analysis.get("总类目", "")) or _stringify(product.get("bsr_category", ""))
 
     return {
-        "品牌": brand,
+        "搜索词": brand,
         "ASIN": product.get("asin", ""),
+        "商品id": product.get("asin", ""),
         "url": product.get("url", ""),
         "商品标题": product.get("title", ""),
         "价格": product.get("price", ""),
@@ -111,6 +112,8 @@ def build_analysis_row(brand: str, product: dict, review_summary: dict, llm_call
         "月销量区间": product.get("monthly_sales_range", ""),
         "月销量估算值": product.get("monthly_sales_estimate", ""),
         "月销售额估算": product.get("monthly_revenue_estimate", ""),
+        "总销量估算": product.get("总销量估算", ""),
+        "总销售额估算": product.get("总销售额估算", ""),
         "核心卖点": core_selling_points,
         "优点评炼": pros or _stringify(analysis.get("优点评炼", "")),
         "缺点评炼": cons or _stringify(analysis.get("缺点评炼", "")),

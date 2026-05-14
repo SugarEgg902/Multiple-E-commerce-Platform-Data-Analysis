@@ -833,7 +833,7 @@ def _llm_summarize(positive: list[dict], negative: list[dict]) -> dict:
     sys_prompt = (
         "你是一个电商商品评论分析助手。"
         "你将收到若干条来自 Amazon 的英文好评和差评(中评也归类到差评)，"
-        "请用简体中文总结产品的优点和缺点。"
+        "请用简体中文总结产品的优点和缺点，着重关注缺点。"
         "输出严格的 JSON，字段为 pros(string数组)、cons(string数组)、overall(一段中文总评)。"
         "每条 pros/cons 请精炼成 10-25 字短句，去重，按重要性排序。"
         "只输出 JSON，不要任何额外说明。"

@@ -6,8 +6,14 @@ from typing import Awaitable, Callable
 from mp_agent.application.competitor_workflows import (
     AMAZON_WORKFLOW_SCHEMA,
     EBAY_WORKFLOW_SCHEMA,
+    TEMU_WORKFLOW_SCHEMA,
+    OZON_WORKFLOW_SCHEMA,
+    OTTO_WORKFLOW_SCHEMA,
     run_amazon_competitor_analysis,
     run_ebay_competitor_analysis,
+    run_temu_competitor_analysis,
+    run_ozon_competitor_analysis,
+    run_otto_competitor_analysis,
 )
 
 
@@ -50,6 +56,27 @@ def build_default_registry() -> WorkflowRegistry:
             name="run_ebay_competitor_analysis",
             schema=EBAY_WORKFLOW_SCHEMA,
             handler=run_ebay_competitor_analysis,
+        )
+    )
+    registry.register(
+        WorkflowTool(
+            name="run_temu_competitor_analysis",
+            schema=TEMU_WORKFLOW_SCHEMA,
+            handler=run_temu_competitor_analysis,
+        )
+    )
+    registry.register(
+        WorkflowTool(
+            name="run_ozon_competitor_analysis",
+            schema=OZON_WORKFLOW_SCHEMA,
+            handler=run_ozon_competitor_analysis,
+        )
+    )
+    registry.register(
+        WorkflowTool(
+            name="run_otto_competitor_analysis",
+            schema=OTTO_WORKFLOW_SCHEMA,
+            handler=run_otto_competitor_analysis,
         )
     )
     return registry

@@ -289,7 +289,7 @@ def test_decide_next_step_rejects_unsupported_tool_call():
 
     assert decision == {
         "type": "assistant",
-        "message": "目前只支持 Amazon 竞品分析，请改用 Amazon。",
+        "message": "目前只支持 Amazon、eBay、Temu、OZON 竞品分析，请改用其中一个平台。",
         "slot_updates": {
             "platform": "temu",
             "brand": "Blackview",
