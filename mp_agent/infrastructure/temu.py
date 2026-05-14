@@ -2,369 +2,122 @@ from __future__ import annotations
 
 import asyncio
 import json
-import random
+import os
 import re
 from datetime import datetime
-from typing import Any
 
-try:
-    from playwright.async_api import async_playwright
-except ImportError:
-    async_playwright = None
-
-try:
-    from playwright_stealth import Stealth
-except ImportError:
-    Stealth = None
-
+APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "apify_api_gVcg3a3TfXLLX1NSDSrBxGL67AAccx3qK1Su")
+APIFY_TEMU_ACTOR = "LTBzVVq592mKgR6lU"
 
 LLM_BASE_URL = "http://10.0.0.21:8000/v1"
 LLM_MODEL = "qwen3.6-35b-a3b-fp8"
-MIN_DELAY = 8.0
-MAX_DELAY = 18.0
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/134.0.0.0 Safari/537.36"
-)
-_TEMU_HOME = "https://www.temu.com"
+
+_product_cache: dict[str, dict] = {}
 
 
-def _require_playwright_scraping() -> None:
-    if async_playwright is None or Stealth is None:
-        raise RuntimeError(
-            "Temu scraping requires 'playwright' and 'playwright-stealth' to be installed."
-        )
-
-
-async def _human_delay(min_sec: float | None = None, max_sec: float | None = None) -> None:
-    await asyncio.sleep(random.uniform(min_sec or MIN_DELAY, max_sec or MAX_DELAY))
-
-
-async def _block_resources(route) -> None:
-    if route.request.resource_type in ["media", "font"]:
-        await route.abort()
-    else:
-        await route.continue_()
-
-
-async def _new_page(playwright, headless: bool):
-    browser = await playwright.chromium.launch(
-        headless=headless,
-        args=[
-            "--disable-blink-features=AutomationControlled",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-        ],
-    )
-    context = await browser.new_context(
-        viewport={"width": random.randint(1280, 1920), "height": random.randint(800, 1080)},
-        user_agent=USER_AGENT,
-        locale="en-US",
-        timezone_id="America/New_York",
-        extra_http_headers={
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-        },
-    )
-    await context.add_init_script("""
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-        window.chrome = { runtime: {} };
-    """)
-    page = await context.new_page()
-    await page.route("**/*", _block_resources)
-    return browser, context, page
-
-
-async def _warm_up_session(page) -> None:
-    """Visit Temu homepage first to establish a real session with cookies."""
-    print("[temu] warming up session via homepage...")
-    try:
-        await page.goto(_TEMU_HOME, wait_until="domcontentloaded", timeout=60000)
-        await _human_delay(5, 10)
-        await page.evaluate("window.scrollBy(0, 400)")
-        await _human_delay(2, 4)
-        await page.evaluate("window.scrollBy(0, 300)")
-        await _human_delay(2, 3)
-    except Exception as e:
-        print(f"[temu] warm-up warning: {e}")
-
-
-def _parse_price_amount(price_text: str | None) -> float | None:
-    match = re.search(r"(\d[\d,]*\.?\d*)", str(price_text or ""))
-    if not match:
+def _parse_price(val) -> float | None:
+    if val is None:
+        return None
+    m = re.search(r"([\d,]+\.?\d*)", str(val))
+    if not m:
         return None
     try:
-        return float(match.group(1).replace(",", ""))
+        return float(m.group(1).replace(",", ""))
     except ValueError:
         return None
 
 
-def _llm_summarize(positive: list[dict], negative: list[dict]) -> dict:
-    from openai import OpenAI
+def _map_apify_item(item: dict, keyword: str) -> dict:
+    goods_id = str(item.get("goods_id") or "")
+    title = (item.get("title") or "").strip()
 
-    client = OpenAI(base_url=LLM_BASE_URL, api_key="EMPTY")
+    # Price lives inside price_info nested object
+    # price_str is already formatted (e.g. "$12.99"), price is the raw number
+    price_info = item.get("price_info") or {}
+    price_float = None
+    price_str = ""
+    for key in ["price_str", "price_text", "price", "split_price_text", "market_price_str"]:
+        val = price_info.get(key)
+        if val is None:
+            continue
+        candidate = _parse_price(val)
+        if candidate is not None and candidate > 0:
+            price_float = candidate
+            price_str = f"${price_float:.2f}"
+            break
 
-    def fmt(reviews: list[dict]) -> str:
-        if not reviews:
-            return "（无）"
-        lines = []
-        for i, r in enumerate(reviews, 1):
-            lines.append(f"{i}. [{r.get('rating','')}] {r.get('title','')}\n   {r.get('text','')}")
-        return "\n".join(lines)
-
-    sys_prompt = (
-        "你是一个电商商品评论分析助手。"
-        "你将收到若干条来自 Temu 的评论（好评和差评），"
-        "请用简体中文总结产品的优点和缺点。"
-        "输出严格的 JSON，字段为 pros(string数组)、cons(string数组)、overall(一段中文总评)。"
-        "每条 pros/cons 请精炼成 10-25 字短句，去重，按重要性排序。"
-        "只输出 JSON，不要任何额外说明。"
-    )
-    user_prompt = (
-        f"【好评 {len(positive)} 条】\n{fmt(positive)}\n\n"
-        f"【差评 {len(negative)} 条】\n{fmt(negative)}\n\n"
-        "请输出 JSON。"
-    )
-    resp = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.2,
-        response_format={"type": "json_object"},
-    )
-    raw = resp.choices[0].message.content or "{}"
+    # Rating and review count from comment nested object
+    comment = item.get("comment") or {}
+    rating_raw = comment.get("goods_score") or comment.get("star") or comment.get("rating") or ""
     try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        parsed = {"pros": [], "cons": [], "overall": raw}
-    return {
-        "pros": parsed.get("pros", []) or [],
-        "cons": parsed.get("cons", []) or [],
-        "overall": parsed.get("overall", "") or "",
-    }
+        rating = float(str(rating_raw)) if rating_raw else None
+    except (ValueError, TypeError):
+        rating = None
 
-
-async def _scrape_search_page(page, keyword: str, page_num: int) -> list[dict]:
-    url = (
-        f"https://www.temu.com/search_result.html"
-        f"?search_key={keyword.replace(' ', '+')}&search_method=recent&page={page_num}"
+    review_count_raw = (
+        comment.get("comment_num_tips") or comment.get("comment_num") or
+        comment.get("count") or 0
     )
-    print(f"[temu search] {keyword} page={page_num}")
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await _human_delay(5, 10)
+        review_count = int(str(review_count_raw).replace(",", ""))
+    except (ValueError, TypeError):
+        review_count = 0
 
-        title = await page.title()
-        if "verify" in title.lower() or "captcha" in title.lower():
-            print("[temu search] bot check detected, waiting...")
-            await _human_delay(10, 20)
+    # Sales from sales_num (string like "1234" or "0")
+    sold_raw = item.get("sales_num") or item.get("sales_tip") or 0
+    try:
+        sold_int = int(str(sold_raw).replace(",", "").replace("+", ""))
+    except (ValueError, TypeError):
+        sold_int = 0
 
-        for _ in range(3):
-            await page.evaluate("window.scrollBy(0, 800)")
-            await _human_delay(1, 3)
+    url = item.get("link_url") or item.get("url") or ""
+    if not url and goods_id:
+        url = f"https://www.temu.com/goods.html?goods_id={goods_id}"
 
-        # Temu product links contain "-g-{goods_id}.html"
-        links = await page.locator('a[href*="-g-"]').all()
-        out: list[dict] = []
-        seen: set[str] = set()
-        for link in links:
-            try:
-                href = await link.get_attribute("href") or ""
-                m = re.search(r"-g-(\d{12,})", href)
-                if m:
-                    goods_id = m.group(1)
-                    if goods_id not in seen:
-                        seen.add(goods_id)
-                        # Build canonical product URL
-                        if href.startswith("http"):
-                            product_url = href.split("?")[0]
-                        else:
-                            product_url = _TEMU_HOME + href.split("?")[0]
-                        out.append({
-                            "goods_id": goods_id,
-                            "keyword": keyword,
-                            "page": page_num,
-                            "url": product_url,
-                            "timestamp": datetime.now().isoformat(),
-                        })
-            except Exception:
-                continue
-        print(f"[temu search] got {len(out)} goods IDs")
-        return out
-    except Exception as e:
-        print(f"[temu search] failed: {e}")
-        return []
+    bullets: list = []
+    monthly_revenue = round(price_float * sold_int, 2) if price_float and sold_int else ""
 
-
-async def _scrape_item_detail(page, goods_id: str, original: dict) -> dict:
-    url = original.get("url") or f"https://www.temu.com/goods.html?goods_id={goods_id}"
-    print(f"[temu detail] {goods_id}")
-    data: dict[str, Any] = {
-        **original,
+    product = {
         "goods_id": goods_id,
+        "asin": goods_id,
+        "keyword": keyword,
         "url": url,
-        "crawl_time": datetime.now().isoformat(),
-        "title": None,
-        "price": None,
-        "rating": None,
-        "review_count": None,
-        "sold_count": None,
-        "monthly_sales_estimate": "",
-        "monthly_revenue_estimate": "",
+        "title": title,
+        "price": price_str,
+        "rating": str(rating) if rating is not None else "",
+        "review_count": review_count,
+        "sold_count": sold_int,
+        "monthly_sales_estimate": sold_int or "",
+        "monthly_revenue_estimate": monthly_revenue,
         "monthly_sales_range": "",
         "bsr_rank": "",
         "bsr_category": "",
         "bsr_display": "",
-        "bullets": [],
-        "is_valid": False,
-        "invalid_reason": None,
+        "bullets": bullets,
+        "is_valid": len(title) > 5 and price_float is not None,
+        "crawl_time": datetime.now().isoformat(),
     }
-    try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await _human_delay(5, 10)
-        for _ in range(4):
-            await page.evaluate("window.scrollBy(0, 800)")
-            await _human_delay(2, 4)
 
-        # Try extracting from embedded JSON first (window.__NEXT_DATA__ or similar)
-        body_html = await page.evaluate("document.body.innerHTML")
+    if goods_id:
+        _product_cache[goods_id] = product
 
-        # title
-        for sel in ["h1", "[class*='title']", "[class*='goods-title']", "[class*='product-title']"]:
-            try:
-                el = page.locator(sel).first
-                if await el.count() > 0:
-                    text = await el.inner_text(timeout=8000)
-                    if text and len(text.strip()) > 5:
-                        data["title"] = text.strip()
-                        break
-            except Exception:
-                continue
+    return product
 
-        # price — try JSON blob first
-        price_m = re.search(r'"price"\s*:\s*"?\$?([\d.]+)"?', body_html)
-        if price_m:
-            data["price"] = f"${price_m.group(1)}"
-        else:
-            for sel in [
-                "[class*='price']",
-                "[class*='Price']",
-                "[data-testid*='price']",
-            ]:
-                try:
-                    el = page.locator(sel).first
-                    if await el.count() > 0:
-                        p = await el.inner_text(timeout=5000)
-                        if p and any(c.isdigit() for c in p):
-                            data["price"] = p.strip()
-                            break
-                except Exception:
-                    continue
 
-        # rating — try JSON blob
-        rating_m = re.search(
-            r'"(?:star|rating|score)"\s*:\s*"?([\d.]+)"?', body_html
-        )
-        if rating_m:
-            data["rating"] = rating_m.group(1)
-        else:
-            try:
-                body_text = await page.locator("body").inner_text(timeout=5000)
-                rm = re.search(r"([\d.]+)\s*(?:out of 5|/5|stars?|分)", body_text, re.IGNORECASE)
-                if rm:
-                    data["rating"] = rm.group(1)
-            except Exception:
-                pass
+def _run_apify(keyword: str, max_results: int) -> list[dict]:
+    from apify_client import ApifyClient
 
-        # sold_count — try JSON "sales_tip" or text pattern
-        sold_int = None
-        sales_m = re.search(
-            r'"sales_tip"\s*:\s*"([^"]*)"', body_html
-        )
-        if sales_m:
-            tip = sales_m.group(1)
-            nm = re.search(r"([\d,]+)", tip)
-            if nm:
-                sold_int = int(nm.group(1).replace(",", ""))
-                data["sold_count"] = tip
-        if sold_int is None:
-            try:
-                body_text = await page.locator("body").inner_text(timeout=5000)
-                sm = re.search(
-                    r"([\d,]+)\+?\s*(?:sold|已售|件已售|orders?)", body_text, re.IGNORECASE
-                )
-                if sm:
-                    sold_int = int(sm.group(1).replace(",", ""))
-                    data["sold_count"] = sm.group(0).strip()
-            except Exception:
-                pass
-
-        # review_count
-        review_m = re.search(r'"review_count"\s*:\s*(\d+)', body_html)
-        if review_m:
-            data["review_count"] = int(review_m.group(1))
-        else:
-            try:
-                body_text = await page.locator("body").inner_text(timeout=5000)
-                rcm = re.search(
-                    r"([\d,]+)\s*(?:reviews?|ratings?|评价|评论)", body_text, re.IGNORECASE
-                )
-                if rcm:
-                    data["review_count"] = rcm.group(1)
-            except Exception:
-                pass
-
-        # bullets from product description / spec list
-        for sel in [
-            "[class*='description'] li",
-            "[class*='spec'] li",
-            "[class*='detail'] li",
-            "[class*='feature'] li",
-        ]:
-            try:
-                items = await page.locator(sel).all()
-                if items:
-                    for item in items[:10]:
-                        t = await item.inner_text(timeout=3000)
-                        if t.strip():
-                            data["bullets"].append(t.strip())
-                    if data["bullets"]:
-                        break
-            except Exception:
-                continue
-
-        # monthly estimates
-        if sold_int is not None:
-            data["monthly_sales_estimate"] = sold_int
-            price_float = _parse_price_amount(data.get("price"))
-            if price_float is not None:
-                data["monthly_revenue_estimate"] = round(price_float * sold_int, 2)
-
-        title = data.get("title") or ""
-        if len(title) > 10 and data.get("price"):
-            data["is_valid"] = True
-        else:
-            data["invalid_reason"] = "缺少关键信息"
-
-        status = "✓ 有效" if data["is_valid"] else f"✗ 无效({data['invalid_reason']})"
-        print(f"  {status} - {(title[:60] if title else '无标题')}")
-        return data
-
-    except Exception as e:
-        data["invalid_reason"] = f"异常: {str(e)[:100]}"
-        print(f"  ✗ 异常: {e}")
-        return data
+    client = ApifyClient(APIFY_API_TOKEN)
+    run_input = {
+        "searchQueries": [keyword],
+        "currency": "USD",
+        "maxResults": max_results,
+    }
+    print(f"[temu apify] running actor {APIFY_TEMU_ACTOR} for {keyword!r} max={max_results}")
+    run = client.actor(APIFY_TEMU_ACTOR).call(run_input=run_input)
+    items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    print(f"[temu apify] got {len(items)} raw items")
+    return items
 
 
 async def scrape_temu_products(
@@ -373,141 +126,66 @@ async def scrape_temu_products(
     max_valid: int = 5,
     headless: bool = False,
 ) -> list[dict]:
-    """搜索关键词 -> 收集 goods_id -> 抓详情 -> 返回有效产品列表。"""
-    _require_playwright_scraping()
+    raw_items = await asyncio.to_thread(_run_apify, keyword, max(20, max_valid))
 
-    all_items: list[dict] = []
-    seen: set[str] = set()
     valid: list[dict] = []
+    for item in raw_items:
+        if len(valid) >= max_valid:
+            break
+        mapped = _map_apify_item(item, keyword)
+        if mapped["is_valid"]:
+            valid.append(mapped)
+            print(f"[temu] {mapped['goods_id']} ✓ {mapped['title'][:50]}")
+        else:
+            print(f"[temu] {mapped['goods_id']} ✗ 无效")
 
-    async with Stealth().use_async(async_playwright()) as pw:
-        browser, _ctx, page = await _new_page(pw, headless)
-        try:
-            await _warm_up_session(page)
-            for pn in range(1, max_pages + 1):
-                items = await _scrape_search_page(page, keyword, pn)
-                for it in items:
-                    if it["goods_id"] not in seen:
-                        seen.add(it["goods_id"])
-                        all_items.append(it)
-                await _human_delay()
-
-            print(f"[temu] 共 {len(all_items)} 个唯一 goods_id, 目标有效 {max_valid}")
-
-            for original in all_items:
-                if len(valid) >= max_valid:
-                    break
-                detail = await _scrape_item_detail(page, original["goods_id"], original)
-                if detail.get("is_valid"):
-                    valid.append(detail)
-                    print(f"[temu] 已拿到 {len(valid)}/{max_valid} 个有效产品")
-                await _human_delay()
-        finally:
-            await browser.close()
-
+    print(f"[temu] 共 {len(valid)} 个有效产品")
     return valid
 
 
-async def scrape_temu_reviews(goods_id: str, product_url: str, max_reviews: int = 60) -> dict:
-    """从 Temu 商品详情页抓取买家评论并用 LLM 总结优缺点。"""
-    _require_playwright_scraping()
+def _llm_analyze_product(product: dict) -> dict:
+    from openai import OpenAI
 
-    reviews: list[dict] = []
-
-    async with Stealth().use_async(async_playwright()) as pw:
-        browser, _ctx, page = await _new_page(pw, headless=True)
-        try:
-            await _warm_up_session(page)
-            url = product_url or f"https://www.temu.com/goods.html?goods_id={goods_id}"
-            print(f"[temu reviews] loading {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            await _human_delay(5, 8)
-            # Scroll to load review section
-            for _ in range(5):
-                await page.evaluate("window.scrollBy(0, 800)")
-                await _human_delay(1, 2)
-
-            # Try multiple review card selectors
-            review_selectors = [
-                "[class*='review-item']",
-                "[class*='ReviewItem']",
-                "[class*='comment-item']",
-                "[class*='CommentItem']",
-                "[class*='review-card']",
-            ]
-            cards = []
-            for sel in review_selectors:
-                try:
-                    found = await page.locator(sel).all()
-                    if found:
-                        cards = found
-                        print(f"[temu reviews] found {len(cards)} review cards via {sel}")
-                        break
-                except Exception:
-                    continue
-
-            for card in cards[:max_reviews]:
-                try:
-                    review: dict[str, Any] = {}
-
-                    # Rating from aria-label or star count
-                    try:
-                        card_html = await card.inner_html(timeout=3000)
-                        rm = re.search(r"([\d.]+)\s*(?:out of 5|/5|stars?)", card_html, re.IGNORECASE)
-                        if rm:
-                            review["rating"] = float(rm.group(1))
-                        else:
-                            # Count filled star elements
-                            filled = await card.locator("[class*='star'][class*='fill'], [class*='star-fill'], [class*='filled']").count()
-                            if filled > 0:
-                                review["rating"] = float(filled)
-                    except Exception:
-                        pass
-
-                    # Review text
-                    for text_sel in [
-                        "[class*='review-content']",
-                        "[class*='ReviewContent']",
-                        "[class*='comment-content']",
-                        "[class*='CommentContent']",
-                        "[class*='review-text']",
-                        "p",
-                    ]:
-                        try:
-                            el = card.locator(text_sel).first
-                            if await el.count() > 0:
-                                text = await el.inner_text(timeout=3000)
-                                if text and len(text.strip()) > 5:
-                                    review["text"] = text.strip()
-                                    break
-                        except Exception:
-                            continue
-
-                    if review.get("text"):
-                        reviews.append(review)
-                except Exception:
-                    continue
-        finally:
-            await browser.close()
-
-    positive = [r for r in reviews if r.get("rating", 0) >= 4]
-    negative = [r for r in reviews if r.get("rating", 5) <= 2]
-
-    print(f"[temu reviews] {len(positive)} positive / {len(negative)} negative")
-
-    if positive or negative:
-        print(f"[temu llm] summarizing {len(positive)} pos / {len(negative)} neg ...")
-        summary = _llm_summarize(positive, negative)
-    else:
-        summary = {"pros": [], "cons": [], "overall": ""}
-
+    client = OpenAI(base_url=LLM_BASE_URL, api_key="EMPTY")
+    sys_prompt = (
+        "你是一个电商竞品分析助手。"
+        "根据商品的标题、价格、评分和销量，用简体中文生成一段竞品定位分析。"
+        "输出严格的 JSON，字段为 overall（一段中文分析，100-150字）。"
+        "只输出 JSON，不要任何额外说明。"
+    )
+    user_prompt = (
+        f"商品标题：{product.get('title', '')}\n"
+        f"价格：{product.get('price', '')}\n"
+        f"评分：{product.get('rating', '')}\n"
+        f"销量：{product.get('sold_count', '')}\n"
+        f"评论数：{product.get('review_count', '')}\n"
+        "请输出 JSON。"
+    )
+    resp = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.3,
+        response_format={"type": "json_object"},
+    )
+    raw = resp.choices[0].message.content or "{}"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = {"overall": raw}
     return {
-        "goods_id": goods_id,
-        "review_count": len(reviews),
-        "positive_count": len(positive),
-        "negative_count": len(negative),
-        "pros": summary["pros"],
-        "cons": summary["cons"],
-        "overall": summary["overall"],
+        "pros": [],
+        "cons": [],
+        "overall": parsed.get("overall", "") or "",
     }
+
+
+async def scrape_temu_reviews(goods_id: str, product_url: str, max_reviews: int = 60) -> dict:
+    product = _product_cache.get(goods_id, {})
+    if not product:
+        return {"pros": [], "cons": [], "overall": ""}
+    print(f"[temu llm] analyzing {goods_id} based on title/price/rating/sales...")
+    return await asyncio.to_thread(_llm_analyze_product, product)
 

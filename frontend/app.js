@@ -12,11 +12,6 @@
 
   const DEFAULT_PROCESSING_TEXT = "正在整理任务...";
 
-  const CSV_PREVIEW_COLUMNS = ["ASIN", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"];
-  const CSV_PREVIEW_ALIASES = {
-    ASIN: ["asin", "Asin"],
-  };
-
   let activeSource = null;
   let sessionId = null;
 
@@ -390,25 +385,11 @@
   }
 
   function normalizePreviewData(columns, rows) {
-    const incomingColumns = Array.isArray(columns) ? columns.map((c) => String(c)) : [];
-    const columnIndex = new Map(incomingColumns.map((c, i) => [c, i]));
+    const cols = Array.isArray(columns) ? columns.map((c) => String(c)) : [];
     const normalizedRows = Array.isArray(rows)
-      ? rows.map((row) => {
-          const values = Array.isArray(row) ? row : [];
-          return CSV_PREVIEW_COLUMNS.map((col) => {
-            const aliases = CSV_PREVIEW_ALIASES[col] || [];
-            for (const candidate of [col, ...aliases]) {
-              const idx = columnIndex.get(candidate);
-              if (idx != null && idx < values.length) {
-                const v = values[idx];
-                return v == null ? "" : String(v);
-              }
-            }
-            return "";
-          });
-        })
+      ? rows.map((row) => (Array.isArray(row) ? row.map((v) => (v == null ? "" : String(v))) : []))
       : [];
-    return { columns: CSV_PREVIEW_COLUMNS.slice(), rows: normalizedRows };
+    return { columns: cols, rows: normalizedRows };
   }
 
   function parsePayload(raw) {

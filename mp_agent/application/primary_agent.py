@@ -59,6 +59,12 @@ def _normalize_slot_value(key: str, value):
             "ebay.com": "ebay",
             "易贝": "ebay",
             "temu": "temu",
+            "ozon": "ozon",
+            "ozon.ru": "ozon",
+            "奥赞": "ozon",
+            "otto": "otto",
+            "otto.de": "otto",
+            "奥托": "otto",
         }
         return platform_aliases.get(compact, compact)
     if key == "brand":
@@ -193,6 +199,22 @@ def _is_complete_temu_slot_state(slot_state: dict) -> bool:
     )
 
 
+def _is_complete_ozon_slot_state(slot_state: dict) -> bool:
+    return (
+        _clean_text(slot_state.get("platform")) == "ozon"
+        and _clean_text(slot_state.get("brand")) is not None
+        and _normalize_count(slot_state.get("count")) is not None
+    )
+
+
+def _is_complete_otto_slot_state(slot_state: dict) -> bool:
+    return (
+        _clean_text(slot_state.get("platform")) == "otto"
+        and _clean_text(slot_state.get("brand")) is not None
+        and _normalize_count(slot_state.get("count")) is not None
+    )
+
+
 def _is_complete_amazon_slot_state(slot_state: dict) -> bool:
     return (
         _clean_text(slot_state.get("platform")) == "amazon"
@@ -261,6 +283,30 @@ def _default_llm_call(messages: list[dict], tools: list[dict]) -> dict:
             "slot_updates": merged_slot_updates,
         }
 
+    if _is_complete_ozon_slot_state(merged_slot_updates):
+        return {
+            "type": "tool_call",
+            "tool_name": "run_ozon_competitor_analysis",
+            "arguments": {
+                "brand": _clean_text(merged_slot_updates.get("brand")),
+                "count": _normalize_count(merged_slot_updates.get("count")),
+            },
+            "assistant_message": "",
+            "slot_updates": merged_slot_updates,
+        }
+
+    if _is_complete_otto_slot_state(merged_slot_updates):
+        return {
+            "type": "tool_call",
+            "tool_name": "run_otto_competitor_analysis",
+            "arguments": {
+                "brand": _clean_text(merged_slot_updates.get("brand")),
+                "count": _normalize_count(merged_slot_updates.get("count")),
+            },
+            "assistant_message": "",
+            "slot_updates": merged_slot_updates,
+        }
+
     return {
         "type": "assistant",
         "message": parsed_decision.get("message") or _build_missing_slot_message(merged_slot_updates),
@@ -273,11 +319,11 @@ def _build_missing_slot_message(slot_state: dict) -> str:
     brand = _clean_text(slot_state.get("brand"))
     count = _normalize_count(slot_state.get("count"))
 
-    supported = {"amazon", "ebay", "temu"}
+    supported = {"amazon", "ebay", "temu", "ozon", "otto"}
     if platform not in (None, *supported):
-        return "目前只支持 Amazon、eBay、Temu 竞品分析，请改用其中一个平台。"
+        return "目前只支持 Amazon、eBay、Temu、OZON、OTTO 竞品分析，请改用其中一个平台。"
     if platform is None:
-        return "你想分析哪个平台？目前我支持 Amazon、eBay 和 Temu。"
+        return "你想分析哪个平台？目前我支持 Amazon、eBay、Temu、OZON 和 OTTO。"
     if brand is None and count is None:
         return "请提供有效的品牌和数量后再试。"
     if brand is None:
@@ -342,7 +388,7 @@ def decide_next_step(messages, slots, tool_schemas, llm_call=None) -> dict:
         if decision.get("tool_name") not in supported_names:
             return {
                 "type": "assistant",
-                "message": "目前只支持 Amazon、eBay、Temu 竞品分析，请改用其中一个平台。",
+                "message": "目前只支持 Amazon、eBay、Temu、OZON 竞品分析，请改用其中一个平台。",
                 "slot_updates": _merge_slot_updates(messages, slots, decision.get("slot_updates", {})),
             }
         if decision.get("tool_name") == "run_amazon_competitor_analysis":
