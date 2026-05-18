@@ -13,7 +13,7 @@ from mp_agent.dao.repository import (
 )
 from mp_agent.dao.matching import schedule_matching
 from mp_agent.infrastructure.amazon import scrape_amazon_products, summarize_reviews
-from mp_agent.infrastructure.artifacts import CSV_COLUMNS, EBAY_CSV_COLUMNS, TEMU_CSV_COLUMNS, OZON_CSV_COLUMNS, OTTO_CSV_COLUMNS, ALLEGRO_CSV_COLUMNS, TIKTOKSHOP_CSV_COLUMNS, CDISCOUNT_CSV_COLUMNS, write_analysis_csv, write_ebay_analysis_csv, write_temu_analysis_csv, write_ozon_analysis_csv, write_otto_analysis_csv, write_allegro_analysis_csv, write_tiktokshop_analysis_csv, write_cdiscount_analysis_csv
+from mp_agent.infrastructure.artifacts import CSV_COLUMNS, EBAY_CSV_COLUMNS, TEMU_CSV_COLUMNS, OZON_CSV_COLUMNS, OTTO_CSV_COLUMNS, ALLEGRO_CSV_COLUMNS, TIKTOKSHOP_CSV_COLUMNS, CDISCOUNT_CSV_COLUMNS, ALIEXPRESS_CSV_COLUMNS, write_analysis_csv, write_ebay_analysis_csv, write_temu_analysis_csv, write_ozon_analysis_csv, write_otto_analysis_csv, write_allegro_analysis_csv, write_tiktokshop_analysis_csv, write_cdiscount_analysis_csv, write_aliexpress_analysis_csv
 from mp_agent.infrastructure.ebay import scrape_ebay_products, scrape_ebay_reviews
 from mp_agent.infrastructure.temu import scrape_temu_products, scrape_temu_reviews, _llm_analyze_product as _temu_llm_analyze
 from mp_agent.infrastructure.ozon import scrape_ozon_products, scrape_ozon_reviews
@@ -21,6 +21,7 @@ from mp_agent.infrastructure.otto import scrape_otto_products, scrape_otto_revie
 from mp_agent.infrastructure.allegro import scrape_allegro_products, scrape_allegro_reviews, _llm_analyze_product as _allegro_llm_analyze
 from mp_agent.infrastructure.tiktokshop import scrape_tiktokshop_products, scrape_tiktokshop_reviews, _llm_analyze_product as _tiktokshop_llm_analyze
 from mp_agent.infrastructure.cdiscount import scrape_cdiscount_products, scrape_cdiscount_reviews, _llm_analyze_product as _cdiscount_llm_analyze
+from mp_agent.infrastructure.aliexpress import scrape_aliexpress_products, scrape_aliexpress_reviews, _llm_analyze_product as _aliexpress_llm_analyze
 
 
 AMAZON_WORKFLOW_SCHEMA = {
@@ -1193,4 +1194,135 @@ async def run_cdiscount_competitor_analysis(
         "filename": csv_path.name,
         "download_url": download_url_builder(csv_path),
         "summary": f"已完成 {len(rows)} 个 Cdiscount 竞品分析",
+    }
+
+
+ALIEXPRESS_WORKFLOW_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "run_aliexpress_competitor_analysis",
+        "description": "在 AliExpress 上抓取指定品牌商品、生成竞品分析并导出 CSV。支持指定国家/地区，默认美国。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "brand": {"type": "string"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 20},
+                "country": {"type": "string", "default": "US"},
+            },
+            "required": ["brand", "count"],
+        },
+    },
+}
+
+
+async def run_aliexpress_competitor_analysis(
+    brand: str,
+    count: int,
+    emit,
+    country: str = "US",
+    *,
+    _skip_cache: bool = False,
+    scrape_products=scrape_aliexpress_products,
+    scrape_reviews_fn=scrape_aliexpress_reviews,
+    build_row_fn=build_analysis_row,
+    write_csv_fn=write_aliexpress_analysis_csv,
+    download_url_builder=_default_download_url,
+) -> dict:
+    _preview_cols = ["商品id", "价格", "评分", "总销量", "总销售额", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "aliexpress", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_aliexpress_competitor_analysis(brand, count, _noop_emit, country=country, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
+    await emit({"type": "tool_status", "tool": "run_aliexpress_competitor_analysis", "message": "正在抓取 AliExpress 商品..."})
+
+    products = await scrape_products(brand, max_valid=count, country=country)
+    if not products:
+        raise RuntimeError("没有抓取到有效商品")
+
+    if _skip_cache:
+        new_products = products[:count]
+    else:
+        seen_new = []
+        for _p in products:
+            _pid = str(_p.get("product_id", ""))
+            if _pid and not await product_exists("aliexpress", _pid):
+                seen_new.append(_p)
+            if len(seen_new) >= count:
+                break
+        new_products = seen_new
+        if not new_products:
+            raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
+
+    rows: list[dict] = []
+    for product in new_products:
+        product_id = product.get("product_id", "")
+        product_url = product.get("url", "")
+        await emit({"type": "tool_status", "tool": "run_aliexpress_competitor_analysis",
+                    "message": f"正在分析 {product_id} ..."})
+        try:
+            review_summary = await scrape_reviews_fn(product_id, product_url)
+        except Exception:
+            review_summary = {"pros": [], "cons": [], "overall": ""}
+
+        ae_product = {**product, "asin": product_id, "url": product_url}
+        if not review_summary.get("overall"):
+            try:
+                review_summary = await _asyncio.to_thread(_aliexpress_llm_analyze, ae_product)
+            except Exception:
+                pass
+
+        row = build_row_fn(brand=brand, product=ae_product, review_summary=review_summary)
+        row["总销量"] = product.get("总销量估算", "")
+        row["总销售额"] = product.get("总销售额估算", "")
+        row["折扣率"] = f"{product.get('discount_percentage', '')}%" if product.get("discount_percentage") else ""
+        row["卖点"] = "；".join(product.get("selling_points") or [])
+        row["原价"] = product.get("original_price", "")
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "aliexpress",
+                "platform_product_id": str(product_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": product.get("price_usd"),
+                "price_original": str(product.get("price", "")),
+                "currency": product.get("currency", "USD"),
+                "rating": product.get("rating") or None,
+                "review_count": product.get("review_count") or None,
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "orders_count": product.get("orders_count"),
+                "discount_percentage": product.get("discount_percentage"),
+                "selling_points": product.get("selling_points"),
+                "is_sponsored": product.get("is_sponsored"),
+            })
+            await save_snapshot(_product_db_id, "aliexpress", str(product_id), {
+                "title": product.get("title"),
+                "price_usd": product.get("price_usd"),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating") or None,
+                "review_count": product.get("review_count") or None,
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
+        rows.append(row)
+
+    csv_path = write_csv_fn(rows, brand=brand, count=count)
+    return {
+        "platform": "aliexpress",
+        "brand": brand,
+        "count": count,
+        "rows": rows,
+        "preview_columns": _preview_cols,
+        "preview_rows": [[row.get(col, "") for col in _preview_cols] for row in rows],
+        "filename": csv_path.name,
+        "download_url": download_url_builder(csv_path),
+        "summary": f"已完成 {len(rows)} 个 AliExpress 竞品分析",
     }

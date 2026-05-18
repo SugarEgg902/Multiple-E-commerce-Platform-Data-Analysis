@@ -126,6 +126,26 @@ CDISCOUNT_CSV_COLUMNS = [
     "竞品定位",
 ]
 
+ALIEXPRESS_CSV_COLUMNS = [
+    "搜索词",
+    "商品id",
+    "url",
+    "商品标题",
+    "价格",
+    "原价",
+    "折扣率",
+    "评分",
+    "总销量",
+    "总销售额",
+    "卖点",
+    "总类目",
+    "核心卖点",
+    "优点评炼",
+    "缺点评炼",
+    "综合分析",
+    "竞品定位",
+]
+
 
 def _sanitize_brand(brand: str) -> str:
     sanitized = re.sub(r"[^a-z0-9]+", "_", brand.lower()).strip("_")
@@ -279,6 +299,27 @@ def write_cdiscount_analysis_csv(rows: list[dict], brand: str, count: int, outpu
     return path
 
 
+def write_aliexpress_analysis_csv(rows: list[dict], brand: str, count: int, output_dir=None) -> Path:
+    output_dir = ARTIFACTS_DIR if output_dir is None else Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_brand = _sanitize_brand(brand)
+    path = output_dir / f"aliexpress_{safe_brand}_{count}_{timestamp}.csv"
+
+    suffix = 1
+    while path.exists():
+        path = output_dir / f"aliexpress_{safe_brand}_{count}_{timestamp}_{suffix}.csv"
+        suffix += 1
+
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=ALIEXPRESS_CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in ALIEXPRESS_CSV_COLUMNS})
+
+    return path
+
+
 def write_analysis_csv(rows: list[dict], brand: str, count: int, output_dir=None) -> Path:
     output_dir = ARTIFACTS_DIR if output_dir is None else Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -355,6 +396,7 @@ _PLATFORM_CSV_COLUMNS = {
     "allegro": ALLEGRO_CSV_COLUMNS,
     "tiktokshop": TIKTOKSHOP_CSV_COLUMNS,
     "cdiscount": CDISCOUNT_CSV_COLUMNS,
+    "aliexpress": ALIEXPRESS_CSV_COLUMNS,
 }
 
 
