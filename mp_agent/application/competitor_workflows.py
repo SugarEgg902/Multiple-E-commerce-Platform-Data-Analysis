@@ -384,6 +384,8 @@ async def run_ebay_competitor_analysis(
             })
             await save_detail(_product_db_id, {
                 "sold_count": product.get("sold_count"),
+                "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
                 "condition": product.get("condition"),
                 "seller_feedback": product.get("seller_feedback"),
                 "bullets": product.get("bullets"),
@@ -527,6 +529,8 @@ async def run_temu_competitor_analysis(
             await save_detail(_product_db_id, {
                 "goods_id": product.get("goods_id"),
                 "sold_count": product.get("sold_count"),
+                "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
                 "bullets": product.get("bullets"),
             })
             await save_snapshot(_product_db_id, "temu", str(goods_id), {
@@ -1040,6 +1044,8 @@ async def run_tiktokshop_competitor_analysis(
             await save_detail(_product_db_id, {
                 "seller": product.get("seller"),
                 "sold_count": product.get("sold_count"),
+                "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
             })
             await save_snapshot(_product_db_id, "tiktokshop", str(product_id), {
                 "title": product.get("title"),
