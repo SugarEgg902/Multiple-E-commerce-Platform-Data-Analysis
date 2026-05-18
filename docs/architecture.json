@@ -1,0 +1,362 @@
+{
+  "project": "M_P_Agent",
+  "description": "多平台电商竞品分析 Agent — 通过自然语言对话驱动，自动抓取多个电商平台商品数据并输出 CSV 报告",
+  "entrypoint": "app.py → uvicorn → mp_agent/presentation/http.py",
+  "layers": [
+    {
+      "id": "frontend",
+      "name": "Frontend",
+      "label": "浏览器前端",
+      "color": "#6366f1",
+      "path": "frontend/",
+      "components": [
+        {
+          "id": "index_html",
+          "name": "index.html",
+          "path": "frontend/index.html",
+          "description": "单页应用入口，包含对话面板、消息列表、输入框",
+          "type": "view"
+        },
+        {
+          "id": "app_js",
+          "name": "app.js",
+          "path": "frontend/app.js",
+          "description": "会话管理、SSE 事件流处理、消息渲染、CSV 预览表格、状态循环动画（kaomoji）",
+          "type": "controller",
+          "keyFunctions": ["bootstrapSession", "postMessageWithSessionRecovery", "openStream", "renderPayload", "startStatusCycle", "buildPreviewTable"]
+        },
+        {
+          "id": "styles_css",
+          "name": "styles.css",
+          "path": "frontend/styles.css",
+          "description": "全局样式",
+          "type": "style"
+        }
+      ]
+    },
+    {
+      "id": "presentation",
+      "name": "Presentation",
+      "label": "HTTP 接口层",
+      "color": "#0ea5e9",
+      "path": "mp_agent/presentation/",
+      "components": [
+        {
+          "id": "http_py",
+          "name": "http.py",
+          "path": "mp_agent/presentation/http.py",
+          "description": "FastAPI 应用，提供 REST API 和 SSE 流式接口，挂载静态前端文件",
+          "type": "api",
+          "endpoints": [
+            "POST   /api/sessions",
+            "GET    /api/sessions/{id}",
+            "POST   /api/sessions/{id}/messages",
+            "GET    /api/sessions/{id}/runs/{run_id}/stream  (SSE)",
+            "GET    /api/download/{filename}",
+            "GET    /  (静态前端)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "application",
+      "name": "Application",
+      "label": "应用层",
+      "color": "#10b981",
+      "path": "mp_agent/application/",
+      "components": [
+        {
+          "id": "agent_service",
+          "name": "agent_service.py",
+          "path": "mp_agent/application/agent_service.py",
+          "description": "会话运行调度，EventQueue 异步事件队列，AgentRun 生命周期管理，构建 artifact/error 事件",
+          "type": "service",
+          "keyClasses": ["EventQueue", "AgentRun"],
+          "keyFunctions": ["new_session", "new_run", "run_session_message", "build_artifact_event", "emit_event"]
+        },
+        {
+          "id": "session_store",
+          "name": "session_store.py",
+          "path": "mp_agent/application/session_store.py",
+          "description": "内存会话存储，管理对话历史、槽位状态（platform/brand/count）、并发运行锁",
+          "type": "store",
+          "keyClasses": ["SessionStore", "ChatSession", "SessionSlots", "ChatMessage", "ConcurrentRunError"]
+        },
+        {
+          "id": "primary_agent",
+          "name": "primary_agent.py",
+          "path": "mp_agent/application/primary_agent.py",
+          "description": "主代理：调用 Dashscope GLM-4.6 提取槽位（platform/brand/count），路由到对应平台工作流，支持多轮追问",
+          "type": "agent",
+          "llm": "Dashscope GLM-4.6",
+          "slots": ["platform", "brand", "count"],
+          "supportedPlatforms": ["amazon", "ebay", "temu", "ozon", "otto", "allegro", "tiktokshop", "cdiscount"],
+          "keyFunctions": ["decide_next_step", "_default_llm_call", "_normalize_slot_value", "summarize_workflow_result"]
+        },
+        {
+          "id": "workflow_registry",
+          "name": "workflow_registry.py",
+          "path": "mp_agent/application/workflow_registry.py",
+          "description": "工作流工具注册表，将平台工具名映射到对应的 async handler 函数",
+          "type": "registry",
+          "keyClasses": ["WorkflowRegistry", "WorkflowTool"]
+        },
+        {
+          "id": "competitor_workflows",
+          "name": "competitor_workflows.py",
+          "path": "mp_agent/application/competitor_workflows.py",
+          "description": "各平台竞品分析工作流：抓取商品 → 过滤已缓存 → LLM 分析 → 写 CSV → 返回预览数据",
+          "type": "workflow",
+          "workflows": [
+            "run_amazon_competitor_analysis",
+            "run_ebay_competitor_analysis",
+            "run_temu_competitor_analysis",
+            "run_ozon_competitor_analysis",
+            "run_otto_competitor_analysis",
+            "run_allegro_competitor_analysis",
+            "run_tiktokshop_competitor_analysis",
+            "run_cdiscount_competitor_analysis"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "domain",
+      "name": "Domain",
+      "label": "领域层",
+      "color": "#f59e0b",
+      "path": "mp_agent/domain/",
+      "components": [
+        {
+          "id": "analysis_py",
+          "name": "analysis.py",
+          "path": "mp_agent/domain/analysis.py",
+          "description": "调用本地 Gemma LLM 构建分析行：核心卖点、优缺点总结、竞品定位",
+          "type": "domain",
+          "llm": "Local Gemma-4-31B :8005",
+          "keyFunctions": ["build_analysis_row"]
+        }
+      ]
+    },
+    {
+      "id": "infrastructure",
+      "name": "Infrastructure",
+      "label": "基础设施层",
+      "color": "#ef4444",
+      "path": "mp_agent/infrastructure/",
+      "components": [
+        {
+          "id": "amazon_py",
+          "name": "amazon.py",
+          "path": "mp_agent/infrastructure/amazon.py",
+          "description": "Playwright 爬虫 + XLSX 文件读取，自动扩页直到满足数量（最多 10 页）",
+          "type": "scraper",
+          "method": "Playwright + XLSX",
+          "currency": "USD",
+          "retryStrategy": "auto-expand pages up to 10",
+          "llm": "Local Qwen :8000"
+        },
+        {
+          "id": "ebay_py",
+          "name": "ebay.py",
+          "path": "mp_agent/infrastructure/ebay.py",
+          "description": "Playwright + playwright-stealth 爬虫，warm-up session，自动扩页",
+          "type": "scraper",
+          "method": "Playwright stealth",
+          "currency": "USD",
+          "retryStrategy": "auto-expand pages up to 10",
+          "llm": "Local Qwen :8000"
+        },
+        {
+          "id": "temu_py",
+          "name": "temu.py",
+          "path": "mp_agent/infrastructure/temu.py",
+          "description": "Apify Actor LTBzVVq592mKgR6lU，最多 3 次重试，每次翻倍请求量",
+          "type": "apify",
+          "method": "Apify Actor",
+          "actorId": "LTBzVVq592mKgR6lU",
+          "currency": "USD",
+          "retryStrategy": "3 attempts, 2× request size",
+          "llm": "Local Qwen :8000"
+        },
+        {
+          "id": "ozon_py",
+          "name": "ozon.py",
+          "path": "mp_agent/infrastructure/ozon.py",
+          "description": "Apify Actor APa5EQZZaXHWBmogv，RUB→USD 换算，评论内嵌在商品数据中",
+          "type": "apify",
+          "method": "Apify Actor",
+          "actorId": "APa5EQZZaXHWBmogv",
+          "currency": "RUB → USD (÷88)",
+          "retryStrategy": "3 attempts, 2× request size",
+          "llm": "Local Qwen :8000"
+        },
+        {
+          "id": "otto_py",
+          "name": "otto.py",
+          "path": "mp_agent/infrastructure/otto.py",
+          "description": "httpx 爬虫，解析 JSON-LD 结构化数据，EUR→USD 换算，自动扩页",
+          "type": "scraper",
+          "method": "httpx + JSON-LD",
+          "currency": "EUR → USD (×1.08)",
+          "retryStrategy": "auto-expand pages up to 10",
+          "llm": "Local Qwen :8000"
+        },
+        {
+          "id": "allegro_py",
+          "name": "allegro.py",
+          "path": "mp_agent/infrastructure/allegro.py",
+          "description": "Apify Actor lsb4qAEjA9czluE8K，PLN→USD 换算，无评论 API 用 LLM 分析规格",
+          "type": "apify",
+          "method": "Apify Actor",
+          "actorId": "lsb4qAEjA9czluE8K",
+          "currency": "PLN → USD (×0.25)",
+          "retryStrategy": "3 attempts, 2× request size",
+          "llm": "Local Qwen :8000"
+        },
+        {
+          "id": "tiktokshop_py",
+          "name": "tiktokshop.py",
+          "path": "mp_agent/infrastructure/tiktokshop.py",
+          "description": "Apify Actor 8WYlVqei2xfY3RaLX，两次调用：search + reviews",
+          "type": "apify",
+          "method": "Apify Actor (2 calls)",
+          "actorId": "8WYlVqei2xfY3RaLX",
+          "currency": "USD",
+          "retryStrategy": "3 attempts, 2× request size",
+          "llm": "Local Qwen :8000"
+        },
+        {
+          "id": "cdiscount_py",
+          "name": "cdiscount.py",
+          "path": "mp_agent/infrastructure/cdiscount.py",
+          "description": "Apify Actor 3hdAlRtUEtXBvj81M，EUR→USD，无评论 API 用 LLM 分析法语规格",
+          "type": "apify",
+          "method": "Apify Actor",
+          "actorId": "3hdAlRtUEtXBvj81M",
+          "currency": "EUR → USD (×1.08)",
+          "retryStrategy": "3 attempts, 2× request size",
+          "llm": "Local Qwen :8000"
+        },
+        {
+          "id": "artifacts_py",
+          "name": "artifacts.py",
+          "path": "mp_agent/infrastructure/artifacts.py",
+          "description": "CSV 写入，每平台独立列定义，文件名含时间戳，输出到 artifacts/ 目录",
+          "type": "storage",
+          "outputDir": "artifacts/",
+          "csvWriters": ["write_analysis_csv", "write_ebay_analysis_csv", "write_temu_analysis_csv", "write_ozon_analysis_csv", "write_otto_analysis_csv", "write_allegro_analysis_csv", "write_tiktokshop_analysis_csv", "write_cdiscount_analysis_csv"]
+        },
+        {
+          "id": "product_cache_py",
+          "name": "product_cache.py",
+          "path": "mp_agent/infrastructure/product_cache.py",
+          "description": "JSON 文件缓存，按平台存储已分析商品 ID，避免重复分析",
+          "type": "cache",
+          "cachePath": "artifacts/cache/{platform}_cache.json"
+        }
+      ]
+    },
+    {
+      "id": "config",
+      "name": "Config",
+      "label": "配置层（gitignored）",
+      "color": "#8b5cf6",
+      "path": "config/",
+      "components": [
+        {
+          "id": "config_py",
+          "name": "config.py",
+          "path": "config/config.py",
+          "description": "集中管理所有 API 密钥、模型地址、汇率常量（已加入 .gitignore，不提交到 git）",
+          "type": "config",
+          "keys": [
+            "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "DASHSCOPE_MODEL",
+            "LLM_BASE_URL", "LLM_MODEL",
+            "ANALYSIS_LLM_BASE_URL", "ANALYSIS_LLM_MODEL",
+            "APIFY_API_TOKEN", "APIFY_API_TOKEN_2",
+            "APIFY_TEMU_ACTOR", "APIFY_OZON_ACTOR", "APIFY_ALLEGRO_ACTOR",
+            "APIFY_TIKTOKSHOP_ACTOR", "APIFY_CDISCOUNT_ACTOR",
+            "PLN_TO_USD", "EUR_TO_USD", "RUB_TO_USD",
+            "ASIN_LIST_XLSX_PATH", "ALL_REVIEWS_XLSX_PATH",
+            "XLSX_POLL_INTERVAL_SEC", "XLSX_POLL_TIMEOUT_SEC"
+          ]
+        }
+      ]
+    }
+  ],
+  "externalServices": [
+    {
+      "id": "dashscope",
+      "name": "Dashscope API",
+      "description": "阿里云 DashScope，GLM-4.6 模型，用于主代理槽位提取和结果总结",
+      "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "glm-4.6",
+      "usedBy": ["primary_agent"]
+    },
+    {
+      "id": "local_llm_8000",
+      "name": "Local LLM :8000",
+      "description": "本地部署 Qwen3.6-35B-A3B-FP8，用于各平台基础设施层商品分析（竞品定位）",
+      "endpoint": "http://10.0.0.21:8000/v1",
+      "model": "qwen3.6-35b-a3b-fp8",
+      "usedBy": ["amazon_py", "ebay_py", "temu_py", "ozon_py", "otto_py", "allegro_py", "tiktokshop_py", "cdiscount_py"]
+    },
+    {
+      "id": "local_llm_8005",
+      "name": "Local LLM :8005",
+      "description": "本地部署 Gemma-4-31B-IT-FP8，用于领域层分析行构建（核心卖点、优缺点、综合分析）",
+      "endpoint": "http://10.0.0.21:8005/v1",
+      "model": "gemma-4-31b-it-fp8",
+      "usedBy": ["analysis_py"]
+    },
+    {
+      "id": "apify",
+      "name": "Apify Cloud",
+      "description": "云端爬虫平台，提供 Temu/Ozon/Allegro/TikTok Shop/Cdiscount 的 Actor",
+      "endpoint": "https://api.apify.com",
+      "actors": {
+        "temu": "LTBzVVq592mKgR6lU",
+        "ozon": "APa5EQZZaXHWBmogv",
+        "allegro": "lsb4qAEjA9czluE8K",
+        "tiktokshop": "8WYlVqei2xfY3RaLX",
+        "cdiscount": "3hdAlRtUEtXBvj81M"
+      },
+      "usedBy": ["temu_py", "ozon_py", "allegro_py", "tiktokshop_py", "cdiscount_py"]
+    }
+  ],
+  "dataFlow": [
+    {"step": 1, "from": "Browser", "to": "http.py", "action": "POST /api/sessions/{id}/messages", "protocol": "HTTP"},
+    {"step": 2, "from": "http.py", "to": "agent_service.py", "action": "new_run() → asyncio.create_task(run_session_message)", "protocol": "internal"},
+    {"step": 3, "from": "http.py", "to": "Browser", "action": "返回 {session_id, run_id}", "protocol": "HTTP"},
+    {"step": 4, "from": "Browser", "to": "http.py", "action": "GET /api/sessions/{id}/runs/{run_id}/stream", "protocol": "SSE"},
+    {"step": 5, "from": "agent_service.py", "to": "primary_agent.py", "action": "decide_next_step(messages, slots, tool_schemas)", "protocol": "internal"},
+    {"step": 6, "from": "primary_agent.py", "to": "Dashscope GLM-4.6", "action": "槽位提取 LLM 调用", "protocol": "HTTPS"},
+    {"step": 7, "from": "primary_agent.py", "to": "agent_service.py", "action": "返回 tool_call 决策 {tool_name, arguments}", "protocol": "internal"},
+    {"step": 8, "from": "agent_service.py", "to": "competitor_workflows.py", "action": "workflow_registry.call_tool(tool_name, args, emit)", "protocol": "internal"},
+    {"step": 9, "from": "competitor_workflows.py", "to": "infrastructure/*", "action": "scrape_*_products(brand, max_valid=count×2)", "protocol": "internal"},
+    {"step": 10, "from": "infrastructure/*", "to": "Apify / Playwright / httpx", "action": "抓取商品数据（含自动重试/扩页）", "protocol": "HTTPS/Browser"},
+    {"step": 11, "from": "competitor_workflows.py", "to": "analysis.py", "action": "build_analysis_row(product, review_summary)", "protocol": "internal"},
+    {"step": 12, "from": "analysis.py", "to": "Local Gemma :8005", "action": "LLM 分析行构建", "protocol": "HTTP"},
+    {"step": 13, "from": "competitor_workflows.py", "to": "artifacts.py", "action": "write_*_analysis_csv(rows, brand, count)", "protocol": "internal"},
+    {"step": 14, "from": "competitor_workflows.py", "to": "product_cache.py", "action": "save_cached_entry(platform, id, row)", "protocol": "internal"},
+    {"step": 15, "from": "agent_service.py", "to": "Browser", "action": "SSE 事件流：tool_status → artifact → assistant → done", "protocol": "SSE"}
+  ],
+  "sseEventTypes": [
+    {"type": "assistant", "description": "LLM 文本回复消息"},
+    {"type": "tool_status", "description": "工具执行进度消息（抓取中、分析中等）"},
+    {"type": "artifact", "description": "CSV 结果 + 预览列/行数据 + 下载链接"},
+    {"type": "error", "description": "任务执行失败消息"},
+    {"type": "done", "description": "流结束信号，前端关闭 EventSource"}
+  ],
+  "platforms": [
+    {"id": "amazon",     "name": "Amazon",      "region": "US", "method": "Playwright + XLSX",    "currency": "USD",        "scraper": "amazon.py",      "apify": false},
+    {"id": "ebay",       "name": "eBay",         "region": "US", "method": "Playwright stealth",   "currency": "USD",        "scraper": "ebay.py",        "apify": false},
+    {"id": "temu",       "name": "Temu",         "region": "US", "method": "Apify Actor",          "currency": "USD",        "scraper": "temu.py",        "apify": true},
+    {"id": "ozon",       "name": "Ozon",         "region": "RU", "method": "Apify Actor",          "currency": "RUB→USD",    "scraper": "ozon.py",        "apify": true},
+    {"id": "otto",       "name": "Otto",         "region": "DE", "method": "httpx + JSON-LD",      "currency": "EUR→USD",    "scraper": "otto.py",        "apify": false},
+    {"id": "allegro",    "name": "Allegro",      "region": "PL", "method": "Apify Actor",          "currency": "PLN→USD",    "scraper": "allegro.py",     "apify": true},
+    {"id": "tiktokshop", "name": "TikTok Shop",  "region": "US", "method": "Apify Actor (2 calls)","currency": "USD",        "scraper": "tiktokshop.py",  "apify": true},
+    {"id": "cdiscount",  "name": "Cdiscount",    "region": "FR", "method": "Apify Actor",          "currency": "EUR→USD",    "scraper": "cdiscount.py",   "apify": true}
+  ]
+}

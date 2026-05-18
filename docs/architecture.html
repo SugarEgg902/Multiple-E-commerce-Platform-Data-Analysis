@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>M_P_Agent — 架构图</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--border:#2e3350;
+  --text:#e2e8f0;--muted:#8892a4;--accent:#6366f1;
+  --layer-frontend:#6366f1;--layer-presentation:#0ea5e9;
+  --layer-application:#10b981;--layer-domain:#f59e0b;
+  --layer-infrastructure:#ef4444;--layer-config:#8b5cf6;
+  --radius:10px;--transition:0.18s ease;
+}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;line-height:1.5;min-height:100vh}
+a{color:inherit;text-decoration:none}
+
+/* ── Layout ── */
+.shell{display:grid;grid-template-columns:220px 1fr 320px;grid-template-rows:56px 1fr;height:100vh;overflow:hidden}
+.topbar{grid-column:1/-1;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 20px}
+.topbar h1{font-size:16px;font-weight:700;letter-spacing:.02em}
+.topbar .sub{color:var(--muted);font-size:12px}
+.sidebar{background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;padding:16px 0}
+.main{overflow-y:auto;padding:20px}
+.detail{background:var(--surface);border-left:1px solid var(--border);overflow-y:auto;padding:20px}
+
+/* ── Sidebar nav ── */
+.nav-section{padding:4px 16px 8px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.nav-item{display:flex;align-items:center;gap:8px;padding:7px 16px;cursor:pointer;border-left:3px solid transparent;transition:background var(--transition),border-color var(--transition)}
+.nav-item:hover{background:var(--surface2)}
+.nav-item.active{background:var(--surface2);border-left-color:var(--accent)}
+.nav-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.nav-item span{font-size:13px}
+
+/* ── Layer cards ── */
+.layer{margin-bottom:20px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.layer-header{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;user-select:none}
+.layer-header:hover{filter:brightness(1.1)}
+.layer-badge{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,.12)}
+.layer-label{font-size:12px;color:rgba(255,255,255,.7)}
+.layer-toggle{margin-left:auto;font-size:16px;transition:transform var(--transition)}
+.layer.collapsed .layer-toggle{transform:rotate(-90deg)}
+.layer-body{padding:12px;display:flex;flex-wrap:wrap;gap:10px;background:var(--surface)}
+.layer.collapsed .layer-body{display:none}
+
+/* ── Component cards ── */
+.comp{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;transition:border-color var(--transition),transform var(--transition);min-width:140px;max-width:200px;flex:1}
+.comp:hover{border-color:var(--accent);transform:translateY(-1px)}
+.comp.selected{border-color:var(--accent);box-shadow:0 0 0 2px rgba(99,102,241,.25)}
+.comp-name{font-size:13px;font-weight:600;margin-bottom:3px}
+.comp-type{font-size:11px;padding:1px 6px;border-radius:3px;display:inline-block;margin-bottom:5px;background:rgba(255,255,255,.08);color:var(--muted)}
+.comp-desc{font-size:11px;color:var(--muted);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+/* ── Detail panel ── */
+.detail-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--muted);text-align:center;gap:8px}
+.detail-empty .icon{font-size:32px}
+.detail-title{font-size:16px;font-weight:700;margin-bottom:4px}
+.detail-path{font-size:11px;color:var(--muted);margin-bottom:14px;font-family:monospace}
+.detail-desc{font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6}
+.detail-section{margin-bottom:14px}
+.detail-section-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:6px}
+.tag-list{display:flex;flex-wrap:wrap;gap:5px}
+.tag{font-size:11px;padding:2px 8px;border-radius:4px;background:var(--surface2);border:1px solid var(--border);font-family:monospace}
+.tag.highlight{background:rgba(99,102,241,.15);border-color:rgba(99,102,241,.4);color:#a5b4fc}
+.endpoint-list{list-style:none}
+.endpoint-list li{font-size:11px;font-family:monospace;padding:3px 0;border-bottom:1px solid var(--border);color:var(--muted)}
+.endpoint-list li:last-child{border-bottom:none}
+
+/* ── Data flow section ── */
+.section-title{font-size:15px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.section-title::before{content:'';display:block;width:3px;height:18px;background:var(--accent);border-radius:2px}
+.flow-list{list-style:none;position:relative;padding-left:28px}
+.flow-list::before{content:'';position:absolute;left:10px;top:0;bottom:0;width:2px;background:var(--border)}
+.flow-item{position:relative;margin-bottom:10px}
+.flow-item::before{content:attr(data-step);position:absolute;left:-28px;top:2px;width:20px;height:20px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.flow-item.sse::before{background:rgba(99,102,241,.2);border-color:var(--accent);color:#a5b4fc}
+.flow-card{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px}
+.flow-route{font-size:12px;font-weight:600;margin-bottom:2px}
+.flow-action{font-size:11px;color:var(--muted);font-family:monospace}
+.flow-proto{font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px;vertical-align:middle}
+.proto-http{background:rgba(16,185,129,.15);color:#6ee7b7}
+.proto-sse{background:rgba(99,102,241,.15);color:#a5b4fc}
+.proto-https{background:rgba(245,158,11,.15);color:#fcd34d}
+.proto-internal{background:rgba(100,116,139,.15);color:#94a3b8}
+
+/* ── Platforms table ── */
+.platform-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-bottom:24px}
+.platform-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.platform-name{font-size:13px;font-weight:700;margin-bottom:4px}
+.platform-meta{font-size:11px;color:var(--muted);line-height:1.6}
+.platform-badge{display:inline-block;font-size:10px;padding:1px 5px;border-radius:3px;margin-top:4px}
+.badge-apify{background:rgba(245,158,11,.15);color:#fcd34d}
+.badge-playwright{background:rgba(16,185,129,.15);color:#6ee7b7}
+.badge-httpx{background:rgba(14,165,233,.15);color:#7dd3fc}
+
+/* ── External services ── */
+.ext-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.ext-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}
+.ext-name{font-size:13px;font-weight:700;margin-bottom:4px}
+.ext-model{font-size:11px;font-family:monospace;color:#a5b4fc;margin-bottom:4px}
+.ext-desc{font-size:11px;color:var(--muted);line-height:1.5}
+
+/* ── SSE events ── */
+.sse-grid{display:flex;flex-wrap:wrap;gap:8px}
+.sse-card{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;min-width:140px}
+.sse-type{font-size:12px;font-weight:700;font-family:monospace;color:#a5b4fc;margin-bottom:3px}
+.sse-desc{font-size:11px;color:var(--muted)}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:2px;margin-bottom:20px;background:var(--surface);border-radius:8px;padding:3px;width:fit-content}
+.tab{padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:background var(--transition),color var(--transition)}
+.tab.active{background:var(--surface2);color:var(--text)}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- Top bar -->
+<header class="topbar">
+  <div>
+    <h1>M_P_Agent</h1>
+  </div>
+  <span class="sub">多平台电商竞品分析 Agent — 架构图</span>
+</header>
+
+<!-- Sidebar -->
+<nav class="sidebar" id="sidebar"></nav>
+
+<!-- Main content -->
+<main class="main" id="main">
+  <div class="tabs">
+    <div class="tab active" data-tab="arch">架构层</div>
+    <div class="tab" data-tab="flow">数据流</div>
+    <div class="tab" data-tab="platforms">平台</div>
+    <div class="tab" data-tab="services">外部服务</div>
+  </div>
+
+  <div class="tab-panel active" id="tab-arch"></div>
+  <div class="tab-panel" id="tab-flow"></div>
+  <div class="tab-panel" id="tab-platforms"></div>
+  <div class="tab-panel" id="tab-services"></div>
+</main>
+
+<!-- Detail panel -->
+<aside class="detail" id="detail">
+  <div class="detail-empty">
+    <div class="icon">🔍</div>
+    <div>点击组件查看详情</div>
+  </div>
+</aside>
+
+</div>
+
+<script>
+const ARCH = {"project":"M_P_Agent","description":"多平台电商竞品分析 Agent — 通过自然语言对话驱动，自动抓取多个电商平台商品数据并输出 CSV 报告","entrypoint":"app.py → uvicorn → mp_agent/presentation/http.py","layers":[{"id":"frontend","name":"Frontend","label":"浏览器前端","color":"#6366f1","path":"frontend/","components":[{"id":"index_html","name":"index.html","path":"frontend/index.html","description":"单页应用入口，包含对话面板、消息列表、输入框","type":"view"},{"id":"app_js","name":"app.js","path":"frontend/app.js","description":"会话管理、SSE 事件流处理、消息渲染、CSV 预览表格、状态循环动画（kaomoji）","type":"controller","keyFunctions":["bootstrapSession","postMessageWithSessionRecovery","openStream","renderPayload","startStatusCycle","buildPreviewTable"]},{"id":"styles_css","name":"styles.css","path":"frontend/styles.css","description":"全局样式","type":"style"}]},{"id":"presentation","name":"Presentation","label":"HTTP 接口层","color":"#0ea5e9","path":"mp_agent/presentation/","components":[{"id":"http_py","name":"http.py","path":"mp_agent/presentation/http.py","description":"FastAPI 应用，提供 REST API 和 SSE 流式接口，挂载静态前端文件","type":"api","endpoints":["POST   /api/sessions","GET    /api/sessions/{id}","POST   /api/sessions/{id}/messages","GET    /api/sessions/{id}/runs/{run_id}/stream  (SSE)","GET    /api/download/{filename}","GET    /  (静态前端)"]}]},{"id":"application","name":"Application","label":"应用层","color":"#10b981","path":"mp_agent/application/","components":[{"id":"agent_service","name":"agent_service.py","path":"mp_agent/application/agent_service.py","description":"会话运行调度，EventQueue 异步事件队列，AgentRun 生命周期管理，构建 artifact/error 事件","type":"service","keyClasses":["EventQueue","AgentRun"],"keyFunctions":["new_session","new_run","run_session_message","build_artifact_event","emit_event"]},{"id":"session_store","name":"session_store.py","path":"mp_agent/application/session_store.py","description":"内存会话存储，管理对话历史、槽位状态（platform/brand/count）、并发运行锁","type":"store","keyClasses":["SessionStore","ChatSession","SessionSlots","ChatMessage","ConcurrentRunError"]},{"id":"primary_agent","name":"primary_agent.py","path":"mp_agent/application/primary_agent.py","description":"主代理：调用 Dashscope GLM-4.6 提取槽位（platform/brand/count），路由到对应平台工作流，支持多轮追问","type":"agent","llm":"Dashscope GLM-4.6","slots":["platform","brand","count"],"supportedPlatforms":["amazon","ebay","temu","ozon","otto","allegro","tiktokshop","cdiscount"],"keyFunctions":["decide_next_step","_default_llm_call","_normalize_slot_value","summarize_workflow_result"]},{"id":"workflow_registry","name":"workflow_registry.py","path":"mp_agent/application/workflow_registry.py","description":"工作流工具注册表，将平台工具名映射到对应的 async handler 函数","type":"registry","keyClasses":["WorkflowRegistry","WorkflowTool"]},{"id":"competitor_workflows","name":"competitor_workflows.py","path":"mp_agent/application/competitor_workflows.py","description":"各平台竞品分析工作流：抓取商品 → 过滤已缓存 → LLM 分析 → 写 CSV → 返回预览数据","type":"workflow","workflows":["run_amazon_competitor_analysis","run_ebay_competitor_analysis","run_temu_competitor_analysis","run_ozon_competitor_analysis","run_otto_competitor_analysis","run_allegro_competitor_analysis","run_tiktokshop_competitor_analysis","run_cdiscount_competitor_analysis"]}]},{"id":"domain","name":"Domain","label":"领域层","color":"#f59e0b","path":"mp_agent/domain/","components":[{"id":"analysis_py","name":"analysis.py","path":"mp_agent/domain/analysis.py","description":"调用本地 Gemma LLM 构建分析行：核心卖点、优缺点总结、竞品定位","type":"domain","llm":"Local Gemma-4-31B :8005","keyFunctions":["build_analysis_row"]}]},{"id":"infrastructure","name":"Infrastructure","label":"基础设施层","color":"#ef4444","path":"mp_agent/infrastructure/","components":[{"id":"amazon_py","name":"amazon.py","path":"mp_agent/infrastructure/amazon.py","description":"Playwright 爬虫 + XLSX 文件读取，自动扩页直到满足数量（最多 10 页）","type":"scraper","method":"Playwright + XLSX","currency":"USD","retryStrategy":"auto-expand pages up to 10","llm":"Local Qwen :8000"},{"id":"ebay_py","name":"ebay.py","path":"mp_agent/infrastructure/ebay.py","description":"Playwright + playwright-stealth 爬虫，warm-up session，自动扩页","type":"scraper","method":"Playwright stealth","currency":"USD","retryStrategy":"auto-expand pages up to 10","llm":"Local Qwen :8000"},{"id":"temu_py","name":"temu.py","path":"mp_agent/infrastructure/temu.py","description":"Apify Actor LTBzVVq592mKgR6lU，最多 3 次重试，每次翻倍请求量","type":"apify","method":"Apify Actor","actorId":"LTBzVVq592mKgR6lU","currency":"USD","retryStrategy":"3 attempts, 2× request size","llm":"Local Qwen :8000"},{"id":"ozon_py","name":"ozon.py","path":"mp_agent/infrastructure/ozon.py","description":"Apify Actor APa5EQZZaXHWBmogv，RUB→USD 换算，评论内嵌在商品数据中","type":"apify","method":"Apify Actor","actorId":"APa5EQZZaXHWBmogv","currency":"RUB → USD (÷88)","retryStrategy":"3 attempts, 2× request size","llm":"Local Qwen :8000"},{"id":"otto_py","name":"otto.py","path":"mp_agent/infrastructure/otto.py","description":"httpx 爬虫，解析 JSON-LD 结构化数据，EUR→USD 换算，自动扩页","type":"scraper","method":"httpx + JSON-LD","currency":"EUR → USD (×1.08)","retryStrategy":"auto-expand pages up to 10","llm":"Local Qwen :8000"},{"id":"allegro_py","name":"allegro.py","path":"mp_agent/infrastructure/allegro.py","description":"Apify Actor lsb4qAEjA9czluE8K，PLN→USD 换算，无评论 API 用 LLM 分析规格","type":"apify","method":"Apify Actor","actorId":"lsb4qAEjA9czluE8K","currency":"PLN → USD (×0.25)","retryStrategy":"3 attempts, 2× request size","llm":"Local Qwen :8000"},{"id":"tiktokshop_py","name":"tiktokshop.py","path":"mp_agent/infrastructure/tiktokshop.py","description":"Apify Actor 8WYlVqei2xfY3RaLX，两次调用：search + reviews","type":"apify","method":"Apify Actor (2 calls)","actorId":"8WYlVqei2xfY3RaLX","currency":"USD","retryStrategy":"3 attempts, 2× request size","llm":"Local Qwen :8000"},{"id":"cdiscount_py","name":"cdiscount.py","path":"mp_agent/infrastructure/cdiscount.py","description":"Apify Actor 3hdAlRtUEtXBvj81M，EUR→USD，无评论 API 用 LLM 分析法语规格","type":"apify","method":"Apify Actor","actorId":"3hdAlRtUEtXBvj81M","currency":"EUR → USD (×1.08)","retryStrategy":"3 attempts, 2× request size","llm":"Local Qwen :8000"},{"id":"artifacts_py","name":"artifacts.py","path":"mp_agent/infrastructure/artifacts.py","description":"CSV 写入，每平台独立列定义，文件名含时间戳，输出到 artifacts/ 目录","type":"storage","outputDir":"artifacts/","csvWriters":["write_analysis_csv","write_ebay_analysis_csv","write_temu_analysis_csv","write_ozon_analysis_csv","write_otto_analysis_csv","write_allegro_analysis_csv","write_tiktokshop_analysis_csv","write_cdiscount_analysis_csv"]},{"id":"product_cache_py","name":"product_cache.py","path":"mp_agent/infrastructure/product_cache.py","description":"JSON 文件缓存，按平台存储已分析商品 ID，避免重复分析","type":"cache","cachePath":"artifacts/cache/{platform}_cache.json"}]},{"id":"config","name":"Config","label":"配置层（gitignored）","color":"#8b5cf6","path":"config/","components":[{"id":"config_py","name":"config.py","path":"config/config.py","description":"集中管理所有 API 密钥、模型地址、汇率常量（已加入 .gitignore，不提交到 git）","type":"config","keys":["DASHSCOPE_API_KEY","DASHSCOPE_BASE_URL","DASHSCOPE_MODEL","LLM_BASE_URL","LLM_MODEL","ANALYSIS_LLM_BASE_URL","ANALYSIS_LLM_MODEL","APIFY_API_TOKEN","APIFY_API_TOKEN_2","APIFY_TEMU_ACTOR","APIFY_OZON_ACTOR","APIFY_ALLEGRO_ACTOR","APIFY_TIKTOKSHOP_ACTOR","APIFY_CDISCOUNT_ACTOR","PLN_TO_USD","EUR_TO_USD","RUB_TO_USD","ASIN_LIST_XLSX_PATH","ALL_REVIEWS_XLSX_PATH","XLSX_POLL_INTERVAL_SEC","XLSX_POLL_TIMEOUT_SEC"]}]}],"externalServices":[{"id":"dashscope","name":"Dashscope API","description":"阿里云 DashScope，GLM-4.6 模型，用于主代理槽位提取和结果总结","endpoint":"https://dashscope.aliyuncs.com/compatible-mode/v1","model":"glm-4.6","usedBy":["primary_agent"]},{"id":"local_llm_8000","name":"Local LLM :8000","description":"本地部署 Qwen3.6-35B-A3B-FP8，用于各平台基础设施层商品分析（竞品定位）","endpoint":"http://10.0.0.21:8000/v1","model":"qwen3.6-35b-a3b-fp8","usedBy":["amazon_py","ebay_py","temu_py","ozon_py","otto_py","allegro_py","tiktokshop_py","cdiscount_py"]},{"id":"local_llm_8005","name":"Local LLM :8005","description":"本地部署 Gemma-4-31B-IT-FP8，用于领域层分析行构建（核心卖点、优缺点、综合分析）","endpoint":"http://10.0.0.21:8005/v1","model":"gemma-4-31b-it-fp8","usedBy":["analysis_py"]},{"id":"apify","name":"Apify Cloud","description":"云端爬虫平台，提供 Temu/Ozon/Allegro/TikTok Shop/Cdiscount 的 Actor","endpoint":"https://api.apify.com","actors":{"temu":"LTBzVVq592mKgR6lU","ozon":"APa5EQZZaXHWBmogv","allegro":"lsb4qAEjA9czluE8K","tiktokshop":"8WYlVqei2xfY3RaLX","cdiscount":"3hdAlRtUEtXBvj81M"},"usedBy":["temu_py","ozon_py","allegro_py","tiktokshop_py","cdiscount_py"]}],"dataFlow":[{"step":1,"from":"Browser","to":"http.py","action":"POST /api/sessions/{id}/messages","protocol":"HTTP"},{"step":2,"from":"http.py","to":"agent_service.py","action":"new_run() → asyncio.create_task(run_session_message)","protocol":"internal"},{"step":3,"from":"http.py","to":"Browser","action":"返回 {session_id, run_id}","protocol":"HTTP"},{"step":4,"from":"Browser","to":"http.py","action":"GET /api/sessions/{id}/runs/{run_id}/stream","protocol":"SSE"},{"step":5,"from":"agent_service.py","to":"primary_agent.py","action":"decide_next_step(messages, slots, tool_schemas)","protocol":"internal"},{"step":6,"from":"primary_agent.py","to":"Dashscope GLM-4.6","action":"槽位提取 LLM 调用","protocol":"HTTPS"},{"step":7,"from":"primary_agent.py","to":"agent_service.py","action":"返回 tool_call 决策 {tool_name, arguments}","protocol":"internal"},{"step":8,"from":"agent_service.py","to":"competitor_workflows.py","action":"workflow_registry.call_tool(tool_name, args, emit)","protocol":"internal"},{"step":9,"from":"competitor_workflows.py","to":"infrastructure/*","action":"scrape_*_products(brand, max_valid=count×2)","protocol":"internal"},{"step":10,"from":"infrastructure/*","to":"Apify / Playwright / httpx","action":"抓取商品数据（含自动重试/扩页）","protocol":"HTTPS/Browser"},{"step":11,"from":"competitor_workflows.py","to":"analysis.py","action":"build_analysis_row(product, review_summary)","protocol":"internal"},{"step":12,"from":"analysis.py","to":"Local Gemma :8005","action":"LLM 分析行构建","protocol":"HTTP"},{"step":13,"from":"competitor_workflows.py","to":"artifacts.py","action":"write_*_analysis_csv(rows, brand, count)","protocol":"internal"},{"step":14,"from":"competitor_workflows.py","to":"product_cache.py","action":"save_cached_entry(platform, id, row)","protocol":"internal"},{"step":15,"from":"agent_service.py","to":"Browser","action":"SSE 事件流：tool_status → artifact → assistant → done","protocol":"SSE"}],"sseEventTypes":[{"type":"assistant","description":"LLM 文本回复消息"},{"type":"tool_status","description":"工具执行进度消息（抓取中、分析中等）"},{"type":"artifact","description":"CSV 结果 + 预览列/行数据 + 下载链接"},{"type":"error","description":"任务执行失败消息"},{"type":"done","description":"流结束信号，前端关闭 EventSource"}],"platforms":[{"id":"amazon","name":"Amazon","region":"US","method":"Playwright + XLSX","currency":"USD","scraper":"amazon.py","apify":false},{"id":"ebay","name":"eBay","region":"US","method":"Playwright stealth","currency":"USD","scraper":"ebay.py","apify":false},{"id":"temu","name":"Temu","region":"US","method":"Apify Actor","currency":"USD","scraper":"temu.py","apify":true},{"id":"ozon","name":"Ozon","region":"RU","method":"Apify Actor","currency":"RUB→USD","scraper":"ozon.py","apify":true},{"id":"otto","name":"Otto","region":"DE","method":"httpx + JSON-LD","currency":"EUR→USD","scraper":"otto.py","apify":false},{"id":"allegro","name":"Allegro","region":"PL","method":"Apify Actor","currency":"PLN→USD","scraper":"allegro.py","apify":true},{"id":"tiktokshop","name":"TikTok Shop","region":"US","method":"Apify Actor (2 calls)","currency":"USD","scraper":"tiktokshop.py","apify":true},{"id":"cdiscount","name":"Cdiscount","region":"FR","method":"Apify Actor","currency":"EUR→USD","scraper":"cdiscount.py","apify":true}]};
+</script>
+<script>
+// ── Render sidebar ──
+const sidebar = document.getElementById('sidebar');
+function renderSidebar() {
+  let html = '<div class="nav-section">架构层</div>';
+  ARCH.layers.forEach(layer => {
+    html += `<div class="nav-item" data-layer="${layer.id}" onclick="scrollToLayer('${layer.id}')">
+      <div class="nav-dot" style="background:${layer.color}"></div>
+      <span>${layer.name}</span>
+    </div>`;
+  });
+  html += '<div class="nav-section" style="margin-top:12px">视图</div>';
+  ['arch','flow','platforms','services'].forEach((t,i) => {
+    const labels = ['架构层','数据流','平台','外部服务'];
+    html += `<div class="nav-item" onclick="switchTab('${t}')"><span>${labels[i]}</span></div>`;
+  });
+  sidebar.innerHTML = html;
+}
+
+// ── Render architecture tab ──
+function renderArch() {
+  const container = document.getElementById('tab-arch');
+  let html = '';
+  ARCH.layers.forEach(layer => {
+    html += `<div class="layer" id="layer-${layer.id}">
+      <div class="layer-header" style="background:${layer.color}22;border-bottom:1px solid ${layer.color}44" onclick="toggleLayer('${layer.id}')">
+        <div class="nav-dot" style="background:${layer.color}"></div>
+        <span class="layer-badge" style="background:${layer.color}33;color:${layer.color}">${layer.name}</span>
+        <span class="layer-label">${layer.label} &nbsp;·&nbsp; ${layer.path}</span>
+        <span class="layer-toggle">▾</span>
+      </div>
+      <div class="layer-body">`;
+    layer.components.forEach(comp => {
+      html += `<div class="comp" id="comp-${comp.id}" onclick="selectComp('${layer.id}','${comp.id}')">
+        <div class="comp-name">${comp.name}</div>
+        <div class="comp-type">${comp.type}</div>
+        <div class="comp-desc">${comp.description}</div>
+      </div>`;
+    });
+    html += `</div></div>`;
+  });
+  container.innerHTML = html;
+}
+
+// ── Render data flow tab ──
+function renderFlow() {
+  const container = document.getElementById('tab-flow');
+  const protoClass = {HTTP:'proto-http',SSE:'proto-sse',HTTPS:'proto-https',internal:'proto-internal','HTTPS/Browser':'proto-https'};
+  let html = `<div class="section-title">请求生命周期</div>
+    <ul class="flow-list">`;
+  ARCH.dataFlow.forEach(f => {
+    const isSSE = f.protocol === 'SSE';
+    const pc = protoClass[f.protocol] || 'proto-internal';
+    html += `<li class="flow-item${isSSE?' sse':''}" data-step="${f.step}">
+      <div class="flow-card">
+        <div class="flow-route">${f.from} → ${f.to}
+          <span class="flow-proto ${pc}">${f.protocol}</span>
+        </div>
+        <div class="flow-action">${f.action}</div>
+      </div>
+    </li>`;
+  });
+  html += `</ul>
+    <div class="section-title" style="margin-top:28px">SSE 事件类型</div>
+    <div class="sse-grid">`;
+  ARCH.sseEventTypes.forEach(e => {
+    html += `<div class="sse-card">
+      <div class="sse-type">${e.type}</div>
+      <div class="sse-desc">${e.description}</div>
+    </div>`;
+  });
+  html += `</div>`;
+  container.innerHTML = html;
+}
+
+// ── Render platforms tab ──
+function renderPlatforms() {
+  const container = document.getElementById('tab-platforms');
+  let html = `<div class="section-title">支持平台（${ARCH.platforms.length} 个）</div>
+    <div class="platform-grid">`;
+  ARCH.platforms.forEach(p => {
+    const badgeClass = p.apify ? 'badge-apify' : (p.method.includes('httpx') ? 'badge-httpx' : 'badge-playwright');
+    const badgeLabel = p.apify ? 'Apify' : (p.method.includes('httpx') ? 'httpx' : 'Playwright');
+    html += `<div class="platform-card">
+      <div class="platform-name">${p.name}</div>
+      <div class="platform-meta">
+        地区：${p.region}<br>
+        货币：${p.currency}<br>
+        文件：${p.scraper}
+      </div>
+      <span class="platform-badge ${badgeClass}">${badgeLabel}</span>
+    </div>`;
+  });
+  html += `</div>`;
+  container.innerHTML = html;
+}
+
+// ── Render external services tab ──
+function renderServices() {
+  const container = document.getElementById('tab-services');
+  let html = `<div class="section-title">外部服务</div><div class="ext-grid">`;
+  ARCH.externalServices.forEach(s => {
+    const actors = s.actors ? Object.entries(s.actors).map(([k,v])=>`${k}: ${v}`).join('<br>') : '';
+    html += `<div class="ext-card">
+      <div class="ext-name">${s.name}</div>
+      ${s.model ? `<div class="ext-model">${s.model}</div>` : ''}
+      <div class="ext-desc">${s.description}</div>
+      ${actors ? `<div class="ext-desc" style="margin-top:6px;font-family:monospace;font-size:10px">${actors}</div>` : ''}
+    </div>`;
+  });
+  html += `</div>`;
+  container.innerHTML = html;
+}
+
+// ── Detail panel ──
+let selectedComp = null;
+function selectComp(layerId, compId) {
+  if (selectedComp) {
+    const prev = document.getElementById('comp-' + selectedComp);
+    if (prev) prev.classList.remove('selected');
+  }
+  selectedComp = compId;
+  const el = document.getElementById('comp-' + compId);
+  if (el) el.classList.add('selected');
+
+  const layer = ARCH.layers.find(l => l.id === layerId);
+  const comp = layer && layer.components.find(c => c.id === compId);
+  if (!comp) return;
+
+  const detail = document.getElementById('detail');
+  let html = `<div class="detail-title">${comp.name}</div>
+    <div class="detail-path">${comp.path || ''}</div>
+    <div class="detail-desc">${comp.description}</div>`;
+
+  if (comp.type) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">类型</div>
+      <div class="tag-list"><span class="tag">${comp.type}</span></div>
+    </div>`;
+  }
+  if (comp.llm) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">LLM</div>
+      <div class="tag-list"><span class="tag highlight">${comp.llm}</span></div>
+    </div>`;
+  }
+  if (comp.method) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">抓取方式</div>
+      <div class="tag-list"><span class="tag">${comp.method}</span></div>
+    </div>`;
+  }
+  if (comp.currency) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">货币</div>
+      <div class="tag-list"><span class="tag">${comp.currency}</span></div>
+    </div>`;
+  }
+  if (comp.retryStrategy) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">重试策略</div>
+      <div class="tag-list"><span class="tag">${comp.retryStrategy}</span></div>
+    </div>`;
+  }
+  if (comp.actorId) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">Apify Actor ID</div>
+      <div class="tag-list"><span class="tag highlight">${comp.actorId}</span></div>
+    </div>`;
+  }
+  if (comp.endpoints) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">API 端点</div>
+      <ul class="endpoint-list">`;
+    comp.endpoints.forEach(e => { html += `<li>${e}</li>`; });
+    html += `</ul></div>`;
+  }
+  if (comp.keyFunctions) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">关键函数</div>
+      <div class="tag-list">`;
+    comp.keyFunctions.forEach(f => { html += `<span class="tag">${f}</span>`; });
+    html += `</div></div>`;
+  }
+  if (comp.keyClasses) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">关键类</div>
+      <div class="tag-list">`;
+    comp.keyClasses.forEach(c => { html += `<span class="tag">${c}</span>`; });
+    html += `</div></div>`;
+  }
+  if (comp.workflows) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">工作流</div>
+      <div class="tag-list">`;
+    comp.workflows.forEach(w => { html += `<span class="tag" style="font-size:10px">${w}</span>`; });
+    html += `</div></div>`;
+  }
+  if (comp.slots) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">槽位</div>
+      <div class="tag-list">`;
+    comp.slots.forEach(s => { html += `<span class="tag highlight">${s}</span>`; });
+    html += `</div></div>`;
+  }
+  if (comp.supportedPlatforms) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">支持平台</div>
+      <div class="tag-list">`;
+    comp.supportedPlatforms.forEach(p => { html += `<span class="tag">${p}</span>`; });
+    html += `</div></div>`;
+  }
+  if (comp.keys) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">配置键</div>
+      <div class="tag-list">`;
+    comp.keys.forEach(k => { html += `<span class="tag" style="font-size:10px">${k}</span>`; });
+    html += `</div></div>`;
+  }
+  if (comp.csvWriters) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">CSV 写入函数</div>
+      <div class="tag-list">`;
+    comp.csvWriters.forEach(w => { html += `<span class="tag" style="font-size:10px">${w}</span>`; });
+    html += `</div></div>`;
+  }
+  if (comp.cachePath) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">缓存路径</div>
+      <div class="tag-list"><span class="tag highlight">${comp.cachePath}</span></div>
+    </div>`;
+  }
+  if (comp.outputDir) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">输出目录</div>
+      <div class="tag-list"><span class="tag">${comp.outputDir}</span></div>
+    </div>`;
+  }
+
+  detail.innerHTML = html;
+}
+
+// ── Tabs ──
+function switchTab(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
+}
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+
+// ── Layer toggle ──
+function toggleLayer(id) {
+  document.getElementById('layer-' + id).classList.toggle('collapsed');
+}
+
+// ── Scroll to layer ──
+function scrollToLayer(id) {
+  switchTab('arch');
+  const el = document.getElementById('layer-' + id);
+  if (el) el.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+// ── Init ──
+renderSidebar();
+renderArch();
+renderFlow();
+renderPlatforms();
+renderServices();
+</script>
+</body>
+</html>
