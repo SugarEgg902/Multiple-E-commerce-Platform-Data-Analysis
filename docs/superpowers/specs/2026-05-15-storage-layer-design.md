@@ -248,9 +248,9 @@ global_product (1)
 | `agent_service.py` | `AgentRun` 创建时同步写 `crawl_task`，完成时更新 `status` |
 
 新增模块：
-- `mp_agent/infrastructure/db.py` — SQLAlchemy engine + session factory
-- `mp_agent/infrastructure/models.py` — ORM 模型定义
-- `mp_agent/infrastructure/repository.py` — 数据访问层（CRUD 函数）
+- `mp_agent/dao/db.py` — SQLAlchemy engine + session factory
+- `mp_agent/dao/models.py` — ORM 模型定义
+- `mp_agent/dao/repository.py` — 数据访问层（CRUD 函数）
 - `alembic/` — 数据库迁移脚本
 
 ---
