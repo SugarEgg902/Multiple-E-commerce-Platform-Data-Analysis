@@ -254,6 +254,11 @@ async def run_amazon_competitor_analysis(
                 "price_original": str(product.get("price", "")),
                 "rating": product.get("rating") or None,
                 "review_count": product.get("review_count") or None,
+                "extra": {
+                    "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                    "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
+                    "bsr_rank": product.get("bsr_rank"),
+                },
             })
             await save_analysis_result(_product_db_id, None, row)
             schedule_matching(_product_db_id, product.get("title", ""))
@@ -396,6 +401,10 @@ async def run_ebay_competitor_analysis(
                 "price_original": str(product.get("price", "")),
                 "rating": product.get("rating") or None,
                 "review_count": product.get("review_count") or None,
+                "extra": {
+                    "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                    "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
+                },
             })
             await save_analysis_result(_product_db_id, None, row)
             schedule_matching(_product_db_id, product.get("title", ""))
@@ -539,6 +548,10 @@ async def run_temu_competitor_analysis(
                 "price_original": str(product.get("price", "")),
                 "rating": product.get("rating") or None,
                 "review_count": product.get("review_count") or None,
+                "extra": {
+                    "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                    "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
+                },
             })
             await save_analysis_result(_product_db_id, None, row)
             schedule_matching(_product_db_id, product.get("title", ""))
@@ -677,6 +690,10 @@ async def run_ozon_competitor_analysis(
                 "price_original": str(product.get("price", "")),
                 "rating": product.get("rating") or None,
                 "review_count": product.get("review_count") or None,
+                "extra": {
+                    "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                    "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
+                },
             })
             await save_analysis_result(_product_db_id, None, row)
             schedule_matching(_product_db_id, product.get("title", ""))
@@ -801,6 +818,10 @@ async def run_otto_competitor_analysis(
                 "price_original": str(product.get("price", "")),
                 "rating": product.get("rating") or None,
                 "review_count": product.get("review_count") or None,
+                "extra": {
+                    "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                    "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
+                },
             })
             await save_analysis_result(_product_db_id, None, row)
             schedule_matching(_product_db_id, product.get("title", ""))
@@ -926,6 +947,10 @@ async def run_allegro_competitor_analysis(
                 "price_original": str(product.get("price", "")),
                 "rating": product.get("rating") or None,
                 "review_count": product.get("review_count") or None,
+                "extra": {
+                    "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                    "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
+                },
             })
             await save_analysis_result(_product_db_id, None, row)
             schedule_matching(_product_db_id, product.get("title", ""))
@@ -1053,6 +1078,10 @@ async def run_tiktokshop_competitor_analysis(
                 "price_original": str(product.get("price", "")),
                 "rating": product.get("rating") or None,
                 "review_count": product.get("review_count") or None,
+                "extra": {
+                    "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                    "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
+                },
             })
             await save_analysis_result(_product_db_id, None, row)
             schedule_matching(_product_db_id, product.get("title", ""))
@@ -1182,6 +1211,10 @@ async def run_cdiscount_competitor_analysis(
                 "price_original": str(product.get("price", "")),
                 "rating": product.get("rating") or None,
                 "review_count": product.get("review_count") or None,
+                "extra": {
+                    "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                    "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
+                },
             })
             await save_analysis_result(_product_db_id, None, row)
             schedule_matching(_product_db_id, product.get("title", ""))
@@ -1315,6 +1348,12 @@ async def run_aliexpress_competitor_analysis(
                 "price_original": str(product.get("price", "")),
                 "rating": product.get("rating") or None,
                 "review_count": product.get("review_count") or None,
+                "extra": {
+                    "orders_count": product.get("orders_count"),
+                    "total_sales_estimate": product.get("总销量估算", ""),
+                    "total_revenue_estimate": product.get("总销售额估算", ""),
+                    "discount_percentage": product.get("discount_percentage"),
+                },
             })
             await save_analysis_result(_product_db_id, None, row)
             schedule_matching(_product_db_id, product.get("title", ""))
