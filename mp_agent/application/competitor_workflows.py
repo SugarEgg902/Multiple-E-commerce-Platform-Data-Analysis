@@ -15,11 +15,11 @@ from mp_agent.dao.matching import schedule_matching
 from mp_agent.infrastructure.amazon import scrape_amazon_products, summarize_reviews
 from mp_agent.infrastructure.artifacts import CSV_COLUMNS, EBAY_CSV_COLUMNS, TEMU_CSV_COLUMNS, OZON_CSV_COLUMNS, OTTO_CSV_COLUMNS, ALLEGRO_CSV_COLUMNS, TIKTOKSHOP_CSV_COLUMNS, CDISCOUNT_CSV_COLUMNS, write_analysis_csv, write_ebay_analysis_csv, write_temu_analysis_csv, write_ozon_analysis_csv, write_otto_analysis_csv, write_allegro_analysis_csv, write_tiktokshop_analysis_csv, write_cdiscount_analysis_csv
 from mp_agent.infrastructure.ebay import scrape_ebay_products, scrape_ebay_reviews
-from mp_agent.infrastructure.temu import scrape_temu_products, scrape_temu_reviews
+from mp_agent.infrastructure.temu import scrape_temu_products, scrape_temu_reviews, _llm_analyze_product as _temu_llm_analyze
 from mp_agent.infrastructure.ozon import scrape_ozon_products, scrape_ozon_reviews
-from mp_agent.infrastructure.otto import scrape_otto_products, scrape_otto_reviews
-from mp_agent.infrastructure.allegro import scrape_allegro_products, scrape_allegro_reviews
-from mp_agent.infrastructure.tiktokshop import scrape_tiktokshop_products, scrape_tiktokshop_reviews
+from mp_agent.infrastructure.otto import scrape_otto_products, scrape_otto_reviews, _llm_analyze_product as _otto_llm_analyze
+from mp_agent.infrastructure.allegro import scrape_allegro_products, scrape_allegro_reviews, _llm_analyze_product as _allegro_llm_analyze
+from mp_agent.infrastructure.tiktokshop import scrape_tiktokshop_products, scrape_tiktokshop_reviews, _llm_analyze_product as _tiktokshop_llm_analyze
 from mp_agent.infrastructure.cdiscount import scrape_cdiscount_products, scrape_cdiscount_reviews, _llm_analyze_product as _cdiscount_llm_analyze
 
 
@@ -503,6 +503,11 @@ async def run_temu_competitor_analysis(
             review_summary = {"pros": [], "cons": [], "overall": ""}
 
         temu_product = {**product, "asin": goods_id, "url": product_url}
+        if not review_summary.get("overall"):
+            try:
+                review_summary = await _asyncio.to_thread(_temu_llm_analyze, temu_product)
+            except Exception:
+                pass
         row = build_row_fn(brand=brand, product=temu_product, review_summary=review_summary)
         try:
             _product_db_id = await upsert_product({
@@ -758,6 +763,11 @@ async def run_otto_competitor_analysis(
             review_summary = {"pros": [], "cons": [], "overall": ""}
 
         otto_product = {**product, "asin": variation_id, "url": product_url}
+        if not review_summary.get("overall"):
+            try:
+                review_summary = await _asyncio.to_thread(_otto_llm_analyze, otto_product)
+            except Exception:
+                pass
         row = build_row_fn(brand=brand, product=otto_product, review_summary=review_summary)
         try:
             _product_db_id = await upsert_product({
@@ -878,6 +888,11 @@ async def run_allegro_competitor_analysis(
             review_summary = {"pros": [], "cons": [], "overall": ""}
 
         allegro_product = {**product, "asin": product_id, "url": product_url}
+        if not review_summary.get("overall"):
+            try:
+                review_summary = await _asyncio.to_thread(_allegro_llm_analyze, allegro_product)
+            except Exception:
+                pass
         row = build_row_fn(brand=brand, product=allegro_product, review_summary=review_summary)
         try:
             _product_db_id = await upsert_product({
@@ -999,6 +1014,11 @@ async def run_tiktokshop_competitor_analysis(
             review_summary = {"pros": [], "cons": [], "overall": ""}
 
         tiktok_product = {**product, "asin": product_id, "url": product_url}
+        if not review_summary.get("overall"):
+            try:
+                review_summary = await _asyncio.to_thread(_tiktokshop_llm_analyze, tiktok_product)
+            except Exception:
+                pass
         row = build_row_fn(brand=brand, product=tiktok_product, review_summary=review_summary)
         row["卖家"] = product.get("seller", "")
         row["评论数"] = product.get("review_count", "")
