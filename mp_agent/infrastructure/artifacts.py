@@ -382,6 +382,11 @@ async def _query_analysis_rows(platform: str, keyword: str, count: int) -> list[
                 "竞品定位": analysis.positioning if analysis else "",
                 "卖家": extra.get("seller", ""),
                 "原价": extra.get("original_price", ""),
+                # AliExpress-specific
+                "总销量": extra.get("total_sales_estimate", ""),
+                "总销售额": extra.get("total_revenue_estimate", ""),
+                "折扣率": f"{extra.get('discount_percentage')}%" if extra.get("discount_percentage") else "",
+                "卖点": "；".join(extra.get("selling_points") or []),
             }
             rows.append(row)
         return rows

@@ -1297,6 +1297,8 @@ async def run_aliexpress_competitor_analysis(
             })
             await save_detail(_product_db_id, {
                 "orders_count": product.get("orders_count"),
+                "total_sales_estimate": product.get("总销量估算", ""),
+                "total_revenue_estimate": product.get("总销售额估算", ""),
                 "discount_percentage": product.get("discount_percentage"),
                 "selling_points": product.get("selling_points"),
                 "is_sponsored": product.get("is_sponsored"),
