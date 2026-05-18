@@ -62,7 +62,7 @@ async def match_and_assign_global_product(product_id: int, title: str) -> None:
         await session.execute(
             update(PlatformProduct)
             .where(PlatformProduct.id == product_id)
-            .values(global_product_id=global_product_id, match_confidence=best_score)
+            .values(global_product_id=global_product_id, match_confidence=round(best_score, 3))
         )
 
 
