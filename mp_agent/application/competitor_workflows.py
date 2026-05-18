@@ -105,37 +105,40 @@ async def run_amazon_competitor_analysis(
             review_summary = {"pros": [], "cons": [], "overall": ""}
 
         row = build_row_fn(brand=brand, product=product, review_summary=review_summary)
-        _product_db_id = await upsert_product({
-            "platform": "amazon",
-            "platform_product_id": str(asin),
-            "keyword": brand,
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "currency": "USD",
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-            "url": product.get("url"),
-            "crawl_time": _dt.utcnow(),
-        })
-        await save_detail(_product_db_id, {
-            "bsr_rank": product.get("bsr_rank"),
-            "bsr_category": product.get("bsr_category"),
-            "bsr_display": product.get("bsr_display"),
-            "monthly_sales_range": product.get("monthly_sales_range"),
-            "monthly_sales_estimate": product.get("monthly_sales_estimate"),
-            "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
-            "bullets": product.get("bullets"),
-        })
-        await save_snapshot(_product_db_id, "amazon", str(asin), {
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-        })
-        await save_analysis_result(_product_db_id, None, row)
-        schedule_matching(_product_db_id, product.get("title", ""))
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "amazon",
+                "platform_product_id": str(asin),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "currency": "USD",
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "bsr_rank": product.get("bsr_rank"),
+                "bsr_category": product.get("bsr_category"),
+                "bsr_display": product.get("bsr_display"),
+                "monthly_sales_range": product.get("monthly_sales_range"),
+                "monthly_sales_estimate": product.get("monthly_sales_estimate"),
+                "monthly_revenue_estimate": product.get("monthly_revenue_estimate"),
+                "bullets": product.get("bullets"),
+            })
+            await save_snapshot(_product_db_id, "amazon", str(asin), {
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
     _preview_cols = ["ASIN", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
@@ -233,34 +236,37 @@ async def run_ebay_competitor_analysis(
             "url": product.get("url", f"https://www.ebay.com/itm/{item_id}"),
         }
         row = build_row_fn(brand=brand, product=ebay_product, review_summary=review_summary)
-        _product_db_id = await upsert_product({
-            "platform": "ebay",
-            "platform_product_id": str(item_id),
-            "keyword": brand,
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "currency": "USD",
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-            "url": product.get("url"),
-            "crawl_time": _dt.utcnow(),
-        })
-        await save_detail(_product_db_id, {
-            "sold_count": product.get("sold_count"),
-            "condition": product.get("condition"),
-            "seller_feedback": product.get("seller_feedback"),
-            "bullets": product.get("bullets"),
-        })
-        await save_snapshot(_product_db_id, "ebay", str(item_id), {
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-        })
-        await save_analysis_result(_product_db_id, None, row)
-        schedule_matching(_product_db_id, product.get("title", ""))
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "ebay",
+                "platform_product_id": str(item_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "currency": "USD",
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "sold_count": product.get("sold_count"),
+                "condition": product.get("condition"),
+                "seller_feedback": product.get("seller_feedback"),
+                "bullets": product.get("bullets"),
+            })
+            await save_snapshot(_product_db_id, "ebay", str(item_id), {
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
     _preview_cols = ["商品id", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
@@ -355,33 +361,36 @@ async def run_temu_competitor_analysis(
 
         temu_product = {**product, "asin": goods_id, "url": product_url}
         row = build_row_fn(brand=brand, product=temu_product, review_summary=review_summary)
-        _product_db_id = await upsert_product({
-            "platform": "temu",
-            "platform_product_id": str(goods_id),
-            "keyword": brand,
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "currency": "USD",
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-            "url": product.get("url"),
-            "crawl_time": _dt.utcnow(),
-        })
-        await save_detail(_product_db_id, {
-            "goods_id": product.get("goods_id"),
-            "sold_count": product.get("sold_count"),
-            "bullets": product.get("bullets"),
-        })
-        await save_snapshot(_product_db_id, "temu", str(goods_id), {
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-        })
-        await save_analysis_result(_product_db_id, None, row)
-        schedule_matching(_product_db_id, product.get("title", ""))
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "temu",
+                "platform_product_id": str(goods_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "currency": "USD",
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "goods_id": product.get("goods_id"),
+                "sold_count": product.get("sold_count"),
+                "bullets": product.get("bullets"),
+            })
+            await save_snapshot(_product_db_id, "temu", str(goods_id), {
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
     _preview_cols = ["商品id", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
@@ -476,35 +485,38 @@ async def run_ozon_competitor_analysis(
 
         ozon_product = {**product, "asin": product_id, "url": product_url}
         row = build_row_fn(brand=brand, product=ozon_product, review_summary=review_summary)
-        _product_db_id = await upsert_product({
-            "platform": "ozon",
-            "platform_product_id": str(product_id),
-            "keyword": brand,
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "currency": "USD",
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-            "url": product.get("url"),
-            "crawl_time": _dt.utcnow(),
-        })
-        await save_detail(_product_db_id, {
-            "sku": product.get("sku"),
-            "total_sales_estimate": product.get("total_sales_estimate"),
-            "total_revenue_estimate": product.get("total_revenue_estimate"),
-            "breadcrumbs": product.get("breadcrumbs"),
-            "short_characteristics": product.get("short_characteristics"),
-        })
-        await save_snapshot(_product_db_id, "ozon", str(product_id), {
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-        })
-        await save_analysis_result(_product_db_id, None, row)
-        schedule_matching(_product_db_id, product.get("title", ""))
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "ozon",
+                "platform_product_id": str(product_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "currency": "USD",
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "sku": product.get("sku"),
+                "total_sales_estimate": product.get("total_sales_estimate"),
+                "total_revenue_estimate": product.get("total_revenue_estimate"),
+                "breadcrumbs": product.get("breadcrumbs"),
+                "short_characteristics": product.get("short_characteristics"),
+            })
+            await save_snapshot(_product_db_id, "ozon", str(product_id), {
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
     _preview_cols = ["商品id", "价格", "评分", "总销量估算", "总销售额估算", "综合分析"]
@@ -580,35 +592,38 @@ async def run_otto_competitor_analysis(
 
         otto_product = {**product, "asin": variation_id, "url": product_url}
         row = build_row_fn(brand=brand, product=otto_product, review_summary=review_summary)
-        _product_db_id = await upsert_product({
-            "platform": "otto",
-            "platform_product_id": str(variation_id),
-            "keyword": brand,
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "currency": "USD",
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-            "url": product.get("url"),
-            "crawl_time": _dt.utcnow(),
-        })
-        await save_detail(_product_db_id, {
-            "variation_id": product.get("variation_id"),
-            "total_sales_estimate": product.get("total_sales_estimate"),
-            "total_revenue_estimate": product.get("total_revenue_estimate"),
-            "description": product.get("description"),
-            "bullets": product.get("bullets"),
-        })
-        await save_snapshot(_product_db_id, "otto", str(variation_id), {
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-        })
-        await save_analysis_result(_product_db_id, None, row)
-        schedule_matching(_product_db_id, product.get("title", ""))
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "otto",
+                "platform_product_id": str(variation_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "currency": "USD",
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "variation_id": product.get("variation_id"),
+                "total_sales_estimate": product.get("total_sales_estimate"),
+                "total_revenue_estimate": product.get("total_revenue_estimate"),
+                "description": product.get("description"),
+                "bullets": product.get("bullets"),
+            })
+            await save_snapshot(_product_db_id, "otto", str(variation_id), {
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
     _preview_cols = ["ASIN", "价格", "评分", "总销量估算", "总销售额估算", "综合分析"]
@@ -685,35 +700,38 @@ async def run_allegro_competitor_analysis(
 
         allegro_product = {**product, "asin": product_id, "url": product_url}
         row = build_row_fn(brand=brand, product=allegro_product, review_summary=review_summary)
-        _product_db_id = await upsert_product({
-            "platform": "allegro",
-            "platform_product_id": str(product_id),
-            "keyword": brand,
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "currency": "USD",
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-            "url": product.get("url"),
-            "crawl_time": _dt.utcnow(),
-        })
-        await save_detail(_product_db_id, {
-            "condition": product.get("condition"),
-            "seller": product.get("seller"),
-            "seller_rating": product.get("seller_rating"),
-            "category": product.get("category"),
-            "parameters": product.get("parameters"),
-        })
-        await save_snapshot(_product_db_id, "allegro", str(product_id), {
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-        })
-        await save_analysis_result(_product_db_id, None, row)
-        schedule_matching(_product_db_id, product.get("title", ""))
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "allegro",
+                "platform_product_id": str(product_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "currency": "USD",
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "condition": product.get("condition"),
+                "seller": product.get("seller"),
+                "seller_rating": product.get("seller_rating"),
+                "category": product.get("category"),
+                "parameters": product.get("parameters"),
+            })
+            await save_snapshot(_product_db_id, "allegro", str(product_id), {
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
     _preview_cols = ["商品id", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
@@ -793,32 +811,35 @@ async def run_tiktokshop_competitor_analysis(
         row = build_row_fn(brand=brand, product=tiktok_product, review_summary=review_summary)
         row["卖家"] = product.get("seller", "")
         row["评论数"] = product.get("review_count", "")
-        _product_db_id = await upsert_product({
-            "platform": "tiktokshop",
-            "platform_product_id": str(product_id),
-            "keyword": brand,
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "currency": "USD",
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-            "url": product.get("url"),
-            "crawl_time": _dt.utcnow(),
-        })
-        await save_detail(_product_db_id, {
-            "seller": product.get("seller"),
-            "sold_count": product.get("sold_count"),
-        })
-        await save_snapshot(_product_db_id, "tiktokshop", str(product_id), {
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-        })
-        await save_analysis_result(_product_db_id, None, row)
-        schedule_matching(_product_db_id, product.get("title", ""))
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "tiktokshop",
+                "platform_product_id": str(product_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "currency": "USD",
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "seller": product.get("seller"),
+                "sold_count": product.get("sold_count"),
+            })
+            await save_snapshot(_product_db_id, "tiktokshop", str(product_id), {
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
     _preview_cols = ["商品id", "价格", "评分", "评论数", "卖家", "月销量估算值", "综合分析"]
@@ -896,34 +917,37 @@ async def run_cdiscount_competitor_analysis(
         row = build_row_fn(brand=brand, product=cd_product, review_summary=review_summary)
         row["原价"] = product.get("striked_price", "")
         row["卖家"] = product.get("seller", "")
-        _product_db_id = await upsert_product({
-            "platform": "cdiscount",
-            "platform_product_id": str(product_id),
-            "keyword": brand,
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "currency": "USD",
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-            "url": product.get("url"),
-            "crawl_time": _dt.utcnow(),
-        })
-        await save_detail(_product_db_id, {
-            "original_price": product.get("original_price"),
-            "seller": product.get("seller"),
-            "category": product.get("category"),
-            "bullet_points": product.get("bullet_points"),
-        })
-        await save_snapshot(_product_db_id, "cdiscount", str(product_id), {
-            "title": product.get("title"),
-            "price_usd": _parse_price_usd(product.get("price", "")),
-            "price_original": str(product.get("price", "")),
-            "rating": product.get("rating"),
-            "review_count": product.get("review_count"),
-        })
-        await save_analysis_result(_product_db_id, None, row)
-        schedule_matching(_product_db_id, product.get("title", ""))
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "cdiscount",
+                "platform_product_id": str(product_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "currency": "USD",
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "original_price": product.get("original_price"),
+                "seller": product.get("seller"),
+                "category": product.get("category"),
+                "bullet_points": product.get("bullet_points"),
+            })
+            await save_snapshot(_product_db_id, "cdiscount", str(product_id), {
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(product.get("price", "")),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating"),
+                "review_count": product.get("review_count"),
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
     _preview_cols = ["商品id", "价格", "原价", "卖家", "总类目", "综合分析"]
