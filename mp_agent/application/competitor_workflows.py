@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio as _asyncio
 import re as _re
-from datetime import datetime as _dt
+from datetime import datetime as _dt, timedelta as _timedelta
 from pathlib import Path
 
+from config.config import CACHE_TTL_DAYS
 from mp_agent.domain.analysis import build_analysis_row
 from mp_agent.dao.repository import (
     upsert_product, save_detail, save_snapshot, save_analysis_result, product_exists,
+    get_latest_crawl_time, has_running_crawl_task,
 )
 from mp_agent.dao.matching import schedule_matching
 from mp_agent.infrastructure.amazon import scrape_amazon_products, summarize_reviews
@@ -47,17 +50,130 @@ def _parse_price_usd(price_str: str) -> float | None:
     return float(m.group()) if m else None
 
 
+async def _noop_emit(_: dict) -> None:
+    pass
+
+
+# Tracks (platform, keyword) pairs currently being re-crawled in the background.
+_running_background_crawls: set[tuple[str, str]] = set()
+
+
+async def _try_serve_from_cache(
+    platform: str,
+    brand: str,
+    count: int,
+    emit,
+    preview_cols: list[str],
+    download_url_builder,
+    background_fn,
+) -> dict | None:
+    """
+    Stale-while-revalidate cache check.
+
+    Returns a result dict on cache hit (Cases A and B), None on cache miss (Case C).
+    For Case B (stale), also fires a background re-crawl task.
+    """
+    try:
+        latest = await get_latest_crawl_time(platform, brand)
+    except Exception:
+        return None  # DB unavailable — fall through to live crawl
+
+    if latest is None:
+        return None  # Case C: no data in DB
+
+    try:
+        from mp_agent.infrastructure.artifacts import _query_analysis_rows, export_platform_csv_from_db
+        rows = await _query_analysis_rows(platform, brand, count)
+    except Exception:
+        return None
+
+    if not rows:
+        return None  # Crawl time exists but no analysis rows — treat as Case C
+
+    try:
+        csv_path = await export_platform_csv_from_db(platform, brand, count)
+    except Exception:
+        return None
+
+    age = _dt.utcnow() - latest
+    ttl = _timedelta(days=CACHE_TTL_DAYS)
+    date_str = latest.strftime("%Y-%m-%d")
+
+    result: dict = {
+        "platform": platform,
+        "brand": brand,
+        "count": count,
+        "rows": rows,
+        "preview_columns": preview_cols,
+        "preview_rows": [[row.get(col, "") for col in preview_cols] for row in rows],
+        "filename": csv_path.name,
+        "download_url": download_url_builder(csv_path),
+        "from_cache": True,
+    }
+
+    if age > ttl:
+        # Case B: stale — return cached data and trigger background re-crawl
+        key = (platform, brand)
+        already_running = key in _running_background_crawls
+        if not already_running:
+            try:
+                already_running = await has_running_crawl_task(platform, brand)
+            except Exception:
+                pass
+
+        if not already_running:
+            _asyncio.get_running_loop().create_task(_background_crawl(platform, brand, background_fn))
+            await emit({
+                "type": "tool_status",
+                "tool": f"run_{platform}_competitor_analysis",
+                "message": f"缓存已过期（{int(age.total_seconds() / 86400)} 天），已在后台触发重新爬取。",
+            })
+        result["summary"] = f"已从缓存返回 {len(rows)} 个竞品分析（数据时间：{date_str}，后台更新中）"
+    else:
+        # Case A: fresh — return cached data directly
+        await emit({
+            "type": "tool_status",
+            "tool": f"run_{platform}_competitor_analysis",
+            "message": f"命中缓存，直接返回（数据时间：{date_str}）",
+        })
+        result["summary"] = f"已从缓存返回 {len(rows)} 个竞品分析（数据时间：{date_str}）"
+
+    return result
+
+
+async def _background_crawl(platform: str, brand: str, workflow_coro_fn) -> None:
+    """Fire-and-forget wrapper that tracks running background crawls."""
+    key = (platform, brand)
+    _running_background_crawls.add(key)
+    try:
+        await workflow_coro_fn()
+    except Exception:
+        pass
+    finally:
+        _running_background_crawls.discard(key)
+
+
 async def run_amazon_competitor_analysis(
     brand: str,
     count: int,
     emit,
     *,
+    _skip_cache: bool = False,
     scrape_products=scrape_amazon_products,
     summarize_reviews_fn=summarize_reviews,
     build_row_fn=build_analysis_row,
     write_csv_fn=write_analysis_csv,
     download_url_builder=_default_download_url,
 ) -> dict:
+    _preview_cols = ["ASIN", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "amazon", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_amazon_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
     await emit(
         {
             "type": "tool_status",
@@ -70,16 +186,19 @@ async def run_amazon_competitor_analysis(
     if not products:
         raise RuntimeError("没有抓取到有效商品")
 
-    seen_new = []
-    for _p in products:
-        _pid = str(_p.get("asin", ""))
-        if _pid and not await product_exists("amazon", _pid):
-            seen_new.append(_p)
-        if len(seen_new) >= count:
-            break
-    new_products = seen_new
-    if not new_products:
-        raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
+    if _skip_cache:
+        new_products = products[:count]
+    else:
+        seen_new = []
+        for _p in products:
+            _pid = str(_p.get("asin", ""))
+            if _pid and not await product_exists("amazon", _pid):
+                seen_new.append(_p)
+            if len(seen_new) >= count:
+                break
+        new_products = seen_new
+        if not new_products:
+            raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
 
     rows: list[dict] = []
     for product in new_products:
@@ -141,7 +260,6 @@ async def run_amazon_competitor_analysis(
             pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
-    _preview_cols = ["ASIN", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
     csv_path = write_csv_fn(rows, brand=brand, count=count)
     return {
         "platform": "amazon",
@@ -178,12 +296,22 @@ async def run_ebay_competitor_analysis(
     count: int,
     emit,
     *,
+    _skip_cache: bool = False,
     scrape_products=scrape_ebay_products,
     scrape_reviews_fn=scrape_ebay_reviews,
     build_row_fn=build_analysis_row,
     write_csv_fn=write_ebay_analysis_csv,
     download_url_builder=_default_download_url,
 ) -> dict:
+    _preview_cols = ["商品id", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "ebay", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_ebay_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
     await emit(
         {
             "type": "tool_status",
@@ -196,16 +324,19 @@ async def run_ebay_competitor_analysis(
     if not products:
         raise RuntimeError("没有抓取到有效商品")
 
-    seen_new = []
-    for _p in products:
-        _pid = str(_p.get("item_id", ""))
-        if _pid and not await product_exists("ebay", _pid):
-            seen_new.append(_p)
-        if len(seen_new) >= count:
-            break
-    new_products = seen_new
-    if not new_products:
-        raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
+    if _skip_cache:
+        new_products = products[:count]
+    else:
+        seen_new = []
+        for _p in products:
+            _pid = str(_p.get("item_id", ""))
+            if _pid and not await product_exists("ebay", _pid):
+                seen_new.append(_p)
+            if len(seen_new) >= count:
+                break
+        new_products = seen_new
+        if not new_products:
+            raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
 
     rows: list[dict] = []
     for product in new_products:
@@ -269,7 +400,6 @@ async def run_ebay_competitor_analysis(
             pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
-    _preview_cols = ["商品id", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
     csv_path = write_csv_fn(rows, brand=brand, count=count)
     return {
         "platform": "ebay",
@@ -306,12 +436,22 @@ async def run_temu_competitor_analysis(
     count: int,
     emit,
     *,
+    _skip_cache: bool = False,
     scrape_products=scrape_temu_products,
     scrape_reviews_fn=scrape_temu_reviews,
     build_row_fn=build_analysis_row,
     write_csv_fn=write_temu_analysis_csv,
     download_url_builder=_default_download_url,
 ) -> dict:
+    _preview_cols = ["商品id", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "temu", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_temu_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
     await emit(
         {
             "type": "tool_status",
@@ -324,16 +464,19 @@ async def run_temu_competitor_analysis(
     if not products:
         raise RuntimeError("没有抓取到有效商品")
 
-    seen_new = []
-    for _p in products:
-        _pid = str(_p.get("goods_id", ""))
-        if _pid and not await product_exists("temu", _pid):
-            seen_new.append(_p)
-        if len(seen_new) >= count:
-            break
-    new_products = seen_new
-    if not new_products:
-        raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
+    if _skip_cache:
+        new_products = products[:count]
+    else:
+        seen_new = []
+        for _p in products:
+            _pid = str(_p.get("goods_id", ""))
+            if _pid and not await product_exists("temu", _pid):
+                seen_new.append(_p)
+            if len(seen_new) >= count:
+                break
+        new_products = seen_new
+        if not new_products:
+            raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
 
     rows: list[dict] = []
     for product in new_products:
@@ -393,7 +536,6 @@ async def run_temu_competitor_analysis(
             pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
-    _preview_cols = ["商品id", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
     csv_path = write_csv_fn(rows, brand=brand, count=count)
     return {
         "platform": "temu",
@@ -430,12 +572,22 @@ async def run_ozon_competitor_analysis(
     count: int,
     emit,
     *,
+    _skip_cache: bool = False,
     scrape_products=scrape_ozon_products,
     scrape_reviews_fn=scrape_ozon_reviews,
     build_row_fn=build_analysis_row,
     write_csv_fn=write_ozon_analysis_csv,
     download_url_builder=_default_download_url,
 ) -> dict:
+    _preview_cols = ["商品id", "价格", "评分", "总销量估算", "总销售额估算", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "ozon", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_ozon_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
     await emit(
         {
             "type": "tool_status",
@@ -448,16 +600,19 @@ async def run_ozon_competitor_analysis(
     if not products:
         raise RuntimeError("没有抓取到有效商品")
 
-    seen_new = []
-    for _p in products:
-        _pid = str(_p.get("product_id", ""))
-        if _pid and not await product_exists("ozon", _pid):
-            seen_new.append(_p)
-        if len(seen_new) >= count:
-            break
-    new_products = seen_new
-    if not new_products:
-        raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
+    if _skip_cache:
+        new_products = products[:count]
+    else:
+        seen_new = []
+        for _p in products:
+            _pid = str(_p.get("product_id", ""))
+            if _pid and not await product_exists("ozon", _pid):
+                seen_new.append(_p)
+            if len(seen_new) >= count:
+                break
+        new_products = seen_new
+        if not new_products:
+            raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
 
     rows: list[dict] = []
     for product in new_products:
@@ -519,7 +674,6 @@ async def run_ozon_competitor_analysis(
             pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
-    _preview_cols = ["商品id", "价格", "评分", "总销量估算", "总销售额估算", "综合分析"]
     csv_path = write_csv_fn(rows, brand=brand, count=count)
     return {
         "platform": "ozon",
@@ -556,28 +710,41 @@ async def run_otto_competitor_analysis(
     count: int,
     emit,
     *,
+    _skip_cache: bool = False,
     scrape_products=scrape_otto_products,
     scrape_reviews_fn=scrape_otto_reviews,
     build_row_fn=build_analysis_row,
     write_csv_fn=write_otto_analysis_csv,
     download_url_builder=_default_download_url,
 ) -> dict:
+    _preview_cols = ["ASIN", "价格", "评分", "总销量估算", "总销售额估算", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "otto", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_otto_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
     await emit({"type": "tool_status", "tool": "run_otto_competitor_analysis", "message": "正在抓取 OTTO 商品..."})
 
     products = await scrape_products(brand, max_valid=count * 2)
     if not products:
         raise RuntimeError("没有抓取到有效商品")
 
-    seen_new = []
-    for _p in products:
-        _pid = str(_p.get("variation_id", ""))
-        if _pid and not await product_exists("otto", _pid):
-            seen_new.append(_p)
-        if len(seen_new) >= count:
-            break
-    new_products = seen_new
-    if not new_products:
-        raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
+    if _skip_cache:
+        new_products = products[:count]
+    else:
+        seen_new = []
+        for _p in products:
+            _pid = str(_p.get("variation_id", ""))
+            if _pid and not await product_exists("otto", _pid):
+                seen_new.append(_p)
+            if len(seen_new) >= count:
+                break
+        new_products = seen_new
+        if not new_products:
+            raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
 
     rows: list[dict] = []
     for product in new_products:
@@ -626,7 +793,6 @@ async def run_otto_competitor_analysis(
             pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
-    _preview_cols = ["ASIN", "价格", "评分", "总销量估算", "总销售额估算", "综合分析"]
     csv_path = write_csv_fn(rows, brand=brand, count=count)
     return {
         "platform": "otto",
@@ -664,28 +830,41 @@ async def run_allegro_competitor_analysis(
     count: int,
     emit,
     *,
+    _skip_cache: bool = False,
     scrape_products=scrape_allegro_products,
     scrape_reviews_fn=scrape_allegro_reviews,
     build_row_fn=build_analysis_row,
     write_csv_fn=write_allegro_analysis_csv,
     download_url_builder=_default_download_url,
 ) -> dict:
+    _preview_cols = ["商品id", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "allegro", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_allegro_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
     await emit({"type": "tool_status", "tool": "run_allegro_competitor_analysis", "message": "正在抓取 Allegro 商品..."})
 
     products = await scrape_products(brand, max_valid=count * 2)
     if not products:
         raise RuntimeError("没有抓取到有效商品")
 
-    seen_new = []
-    for _p in products:
-        _pid = str(_p.get("product_id", ""))
-        if _pid and not await product_exists("allegro", _pid):
-            seen_new.append(_p)
-        if len(seen_new) >= count:
-            break
-    new_products = seen_new
-    if not new_products:
-        raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
+    if _skip_cache:
+        new_products = products[:count]
+    else:
+        seen_new = []
+        for _p in products:
+            _pid = str(_p.get("product_id", ""))
+            if _pid and not await product_exists("allegro", _pid):
+                seen_new.append(_p)
+            if len(seen_new) >= count:
+                break
+        new_products = seen_new
+        if not new_products:
+            raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
 
     rows: list[dict] = []
     for product in new_products:
@@ -734,7 +913,6 @@ async def run_allegro_competitor_analysis(
             pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
-    _preview_cols = ["商品id", "价格", "评分", "月销量估算值", "月销售额估算", "综合分析"]
     csv_path = write_csv_fn(rows, brand=brand, count=count)
     return {
         "platform": "allegro",
@@ -773,28 +951,41 @@ async def run_tiktokshop_competitor_analysis(
     emit,
     region: str = "us",
     *,
+    _skip_cache: bool = False,
     scrape_products=scrape_tiktokshop_products,
     scrape_reviews_fn=scrape_tiktokshop_reviews,
     build_row_fn=build_analysis_row,
     write_csv_fn=write_tiktokshop_analysis_csv,
     download_url_builder=_default_download_url,
 ) -> dict:
+    _preview_cols = ["商品id", "价格", "评分", "评论数", "卖家", "月销量估算值", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "tiktokshop", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_tiktokshop_competitor_analysis(brand, count, _noop_emit, region=region, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
     await emit({"type": "tool_status", "tool": "run_tiktokshop_competitor_analysis", "message": "正在抓取 TikTok Shop 商品..."})
 
     products = await scrape_products(brand, max_valid=count * 2, region=region)
     if not products:
         raise RuntimeError("没有抓取到有效商品")
 
-    seen_new = []
-    for _p in products:
-        _pid = str(_p.get("product_id", ""))
-        if _pid and not await product_exists("tiktokshop", _pid):
-            seen_new.append(_p)
-        if len(seen_new) >= count:
-            break
-    new_products = seen_new
-    if not new_products:
-        raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
+    if _skip_cache:
+        new_products = products[:count]
+    else:
+        seen_new = []
+        for _p in products:
+            _pid = str(_p.get("product_id", ""))
+            if _pid and not await product_exists("tiktokshop", _pid):
+                seen_new.append(_p)
+            if len(seen_new) >= count:
+                break
+        new_products = seen_new
+        if not new_products:
+            raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
 
     rows: list[dict] = []
     for product in new_products:
@@ -842,7 +1033,6 @@ async def run_tiktokshop_competitor_analysis(
             pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
-    _preview_cols = ["商品id", "价格", "评分", "评论数", "卖家", "月销量估算值", "综合分析"]
     csv_path = write_csv_fn(rows, brand=brand, count=count)
     return {
         "platform": "tiktokshop",
@@ -879,28 +1069,41 @@ async def run_cdiscount_competitor_analysis(
     count: int,
     emit,
     *,
+    _skip_cache: bool = False,
     scrape_products=scrape_cdiscount_products,
     scrape_reviews_fn=scrape_cdiscount_reviews,
     build_row_fn=build_analysis_row,
     write_csv_fn=write_cdiscount_analysis_csv,
     download_url_builder=_default_download_url,
 ) -> dict:
+    _preview_cols = ["商品id", "价格", "原价", "卖家", "总类目", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "cdiscount", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_cdiscount_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
     await emit({"type": "tool_status", "tool": "run_cdiscount_competitor_analysis", "message": "正在抓取 Cdiscount 商品..."})
 
     products = await scrape_products(brand, max_valid=count * 2)
     if not products:
         raise RuntimeError("没有抓取到有效商品")
 
-    seen_new = []
-    for _p in products:
-        _pid = str(_p.get("product_id", ""))
-        if _pid and not await product_exists("cdiscount", _pid):
-            seen_new.append(_p)
-        if len(seen_new) >= count:
-            break
-    new_products = seen_new
-    if not new_products:
-        raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
+    if _skip_cache:
+        new_products = products[:count]
+    else:
+        seen_new = []
+        for _p in products:
+            _pid = str(_p.get("product_id", ""))
+            if _pid and not await product_exists("cdiscount", _pid):
+                seen_new.append(_p)
+            if len(seen_new) >= count:
+                break
+        new_products = seen_new
+        if not new_products:
+            raise RuntimeError("所有搜索结果均已分析过，未找到新商品")
 
     rows: list[dict] = []
     for product in new_products:
@@ -950,7 +1153,6 @@ async def run_cdiscount_competitor_analysis(
             pass  # DB unavailable — persist to CSV only
         rows.append(row)
 
-    _preview_cols = ["商品id", "价格", "原价", "卖家", "总类目", "综合分析"]
     csv_path = write_csv_fn(rows, brand=brand, count=count)
     return {
         "platform": "cdiscount",

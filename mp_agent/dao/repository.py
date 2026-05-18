@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from mp_agent.dao.db import get_async_session
@@ -138,3 +138,28 @@ async def save_analysis_result(product_id: int, crawl_task_id: int | None, row: 
             category=row.get("总类目"),
         )
         session.add(ar)
+
+
+async def get_latest_crawl_time(platform: str, keyword: str) -> datetime | None:
+    """Return the most recent crawl_time for any product with this platform+keyword."""
+    async with get_async_session() as session:
+        result = await session.execute(
+            select(func.max(PlatformProduct.crawl_time)).where(
+                PlatformProduct.platform == platform,
+                PlatformProduct.keyword == keyword,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+async def has_running_crawl_task(platform: str, keyword: str) -> bool:
+    """Return True if there is already a running crawl_task for this platform+keyword."""
+    async with get_async_session() as session:
+        result = await session.execute(
+            select(CrawlTask.id).where(
+                CrawlTask.platform == platform,
+                CrawlTask.keyword == keyword,
+                CrawlTask.status == "running",
+            )
+        )
+        return result.scalar_one_or_none() is not None
