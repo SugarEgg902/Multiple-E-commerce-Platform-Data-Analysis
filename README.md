@@ -1,6 +1,6 @@
 # M_P_Agent — 多平台电商竞品分析系统
 
-基于 LLM 的电商竞品分析 Agent，支持 9 大平台自然语言驱动的竞品搜索、数据采集、AI 评论摘要、CSV 导出，并将结果持久化到 MySQL 数据库供历史趋势分析。
+基于 LLM 的电商竞品分析 Agent，支持 10 大平台自然语言驱动的竞品搜索、数据采集、AI 评论摘要、CSV 导出，并将结果持久化到 MySQL 数据库供历史趋势分析。
 
 ---
 
@@ -18,6 +18,7 @@
 - 过期自动后台更新：缓存过期时先返回旧数据给用户，同时后台触发重爬，下次请求即为新数据
 - 强制刷新：用户输入含"实时"、"全新数据"、"重新获取"等关键词时绕过缓存，立即重爬
 - 数量不足补爬：数据库中该关键词的条数少于请求数量时，自动触发重新爬取
+- 关键词大小写不敏感：搜索词统一转为小写存储和匹配，避免因大小写差异导致缓存失效
 
 ### 历史趋势（数据积累后可用）
 - 每次爬取结果以快照形式追加保存，历史数据永不覆盖
@@ -37,12 +38,13 @@
 | Amazon | 全球 | 月销量估算、月销售额、BSR 排名 | Playwright |
 | eBay | 全球 | 月销量估算、月销售额 | Playwright |
 | Temu | 全球 | 月销量估算、月销售额 | Playwright |
-| OZON | 俄罗斯 | 月销量估算、月销售额 | Apify Actor |
-| OTTO | 德国 | 月销量估算、月销售额 | httpx |
+| OZON | 俄罗斯 | 总销量估算、总销售额估算 | Apify Actor |
+| OTTO | 德国 | 总销量估算、总销售额估算 | httpx |
 | Allegro | 波兰 | 月销量估算、月销售额 | Apify Actor |
 | TikTok Shop | 东南亚/美国 | 月销量估算、月销售额 | Apify Actor |
 | Cdiscount | 法国 | 月销量估算、月销售额 | Apify Actor |
 | AliExpress | 全球 | 累计销量、累计销售额、折扣率 | Apify Actor |
+| MercadoLibre | 拉美 | 30天销量、月销售额、总销量、销量增长率 | 本地数据库读取 |
 
 ---
 
@@ -72,8 +74,10 @@ crawl_task  (独立，记录每次爬取任务)
 - 每次爬取执行 UPSERT，覆盖旧值
 - 通过 JSON `extra` 字段存储各平台差异化数据：
   - Amazon：`bsr_rank`、`bsr_category`、`monthly_sales_range`、`monthly_sales_estimate`、`monthly_revenue_estimate`、`bullets`
-  - eBay/Temu/Ozon 等：`monthly_sales_estimate`、`monthly_revenue_estimate`
+  - eBay/Temu/Allegro/TikTokShop/Cdiscount：`monthly_sales_estimate`、`monthly_revenue_estimate`
+  - OZON/OTTO：`total_sales_estimate`、`total_revenue_estimate`
   - AliExpress：`orders_count`、`total_sales_estimate`、`total_revenue_estimate`、`discount_percentage`、`selling_points`
+  - MercadoLibre：从本地 `shadowcraw_db.mercadolibre` 表读取，含 30 天销量、总销量、增长率、转化率等
 
 **`platform_product_snapshot`** — 历史快照，**只追加，不覆盖**
 - 每次爬取无论是否命中缓存，都会 INSERT 一行新快照
@@ -140,7 +144,7 @@ ORDER BY pp.price_usd;
 - **后端**：FastAPI + Python 3.10+
 - **LLM**：GLM-4.6（DashScope）
 - **数据库**：MySQL 8 + SQLAlchemy 2.x (async) + Alembic
-- **爬虫**：Playwright + playwright-stealth（Amazon/eBay/Temu）、Apify Actor（AliExpress/Ozon/Allegro/TikTokShop/Cdiscount）、httpx（Otto）
+- **爬虫**：Playwright + playwright-stealth（Amazon/eBay/Temu）、Apify Actor（AliExpress/Ozon/Allegro/TikTokShop/Cdiscount）、httpx（OTTO）、本地 MySQL 读取（MercadoLibre）
 - **前端**：静态 HTML/JS（`frontend/`）
 
 ---
@@ -158,7 +162,7 @@ mp_agent/
 │   └── analysis.py             # LLM 分析行构建
 ├── infrastructure/
 │   ├── amazon.py / ebay.py / temu.py / ozon.py
-│   ├── otto.py / allegro.py / tiktokshop.py / cdiscount.py / aliexpress.py
+│   ├── otto.py / allegro.py / tiktokshop.py / cdiscount.py / aliexpress.py / mercadolibre.py
 │   └── artifacts.py            # CSV 写入与数据库导出
 └── dao/
     ├── models.py               # SQLAlchemy ORM 模型（7 张表）
@@ -192,6 +196,7 @@ DASHSCOPE_BASE_URL = "..."
 MYSQL_URL = "mysql+asyncmy://user:pass@host/dbname"
 APIFY_API_TOKEN = "..."
 APIFY_ALIEXPRESS_ACTOR = "bkYbOC0TL11Z6lmBl"
+# MercadoLibre 从本地 shadowcraw_db 读取，无需额外配置
 ```
 
 ### 3. 初始化数据库
@@ -216,6 +221,7 @@ uvicorn app:app --reload
 帮我分析一下 doogee 在 Amazon 上的竞品，要 10 个
 查一下 blackview 在 eBay 的竞品 5 个
 分析速卖通上 ulefone 的竞品，5 个
+帮我看一下美客多上 blackview 的竞品，5 个
 帮我重新获取 doogee 在 Amazon 的最新数据，10 个   ← 强制刷新
 ```
 
