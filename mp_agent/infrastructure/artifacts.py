@@ -146,6 +146,35 @@ ALIEXPRESS_CSV_COLUMNS = [
     "竞品定位",
 ]
 
+MERCADOLIBRE_CSV_COLUMNS = [
+    "搜索词",
+    "商品id",
+    "url",
+    "商品标题",
+    "品牌",
+    "子类目",
+    "价格(MXN)",
+    "评分",
+    "评论数",
+    "30天销量",
+    "月销售额(MXN)",
+    "总销量",
+    "销量增长率",
+    "转化率",
+    "BSR排名",
+    "库存数量",
+    "库存类型",
+    "店铺类型",
+    "店铺名称",
+    "上架日期",
+    "核心卖点",
+    "优点评炼",
+    "缺点评炼",
+    "综合分析",
+    "竞品定位",
+    "总类目",
+]
+
 
 def _sanitize_brand(brand: str) -> str:
     sanitized = re.sub(r"[^a-z0-9]+", "_", brand.lower()).strip("_")
@@ -320,6 +349,27 @@ def write_aliexpress_analysis_csv(rows: list[dict], brand: str, count: int, outp
     return path
 
 
+def write_mercadolibre_analysis_csv(rows: list[dict], brand: str, count: int, output_dir=None) -> Path:
+    output_dir = ARTIFACTS_DIR if output_dir is None else Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_brand = _sanitize_brand(brand)
+    path = output_dir / f"mercadolibre_{safe_brand}_{count}_{timestamp}.csv"
+
+    suffix = 1
+    while path.exists():
+        path = output_dir / f"mercadolibre_{safe_brand}_{count}_{timestamp}_{suffix}.csv"
+        suffix += 1
+
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=MERCADOLIBRE_CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in MERCADOLIBRE_CSV_COLUMNS})
+
+    return path
+
+
 def write_analysis_csv(rows: list[dict], brand: str, count: int, output_dir=None) -> Path:
     output_dir = ARTIFACTS_DIR if output_dir is None else Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -402,6 +452,7 @@ _PLATFORM_CSV_COLUMNS = {
     "tiktokshop": TIKTOKSHOP_CSV_COLUMNS,
     "cdiscount": CDISCOUNT_CSV_COLUMNS,
     "aliexpress": ALIEXPRESS_CSV_COLUMNS,
+    "mercadolibre": MERCADOLIBRE_CSV_COLUMNS,
 }
 
 

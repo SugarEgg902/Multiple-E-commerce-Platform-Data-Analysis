@@ -13,7 +13,7 @@ from mp_agent.dao.repository import (
 )
 from mp_agent.dao.matching import schedule_matching
 from mp_agent.infrastructure.amazon import scrape_amazon_products, summarize_reviews
-from mp_agent.infrastructure.artifacts import CSV_COLUMNS, EBAY_CSV_COLUMNS, TEMU_CSV_COLUMNS, OZON_CSV_COLUMNS, OTTO_CSV_COLUMNS, ALLEGRO_CSV_COLUMNS, TIKTOKSHOP_CSV_COLUMNS, CDISCOUNT_CSV_COLUMNS, ALIEXPRESS_CSV_COLUMNS, write_analysis_csv, write_ebay_analysis_csv, write_temu_analysis_csv, write_ozon_analysis_csv, write_otto_analysis_csv, write_allegro_analysis_csv, write_tiktokshop_analysis_csv, write_cdiscount_analysis_csv, write_aliexpress_analysis_csv
+from mp_agent.infrastructure.artifacts import CSV_COLUMNS, EBAY_CSV_COLUMNS, TEMU_CSV_COLUMNS, OZON_CSV_COLUMNS, OTTO_CSV_COLUMNS, ALLEGRO_CSV_COLUMNS, TIKTOKSHOP_CSV_COLUMNS, CDISCOUNT_CSV_COLUMNS, ALIEXPRESS_CSV_COLUMNS, MERCADOLIBRE_CSV_COLUMNS, write_analysis_csv, write_ebay_analysis_csv, write_temu_analysis_csv, write_ozon_analysis_csv, write_otto_analysis_csv, write_allegro_analysis_csv, write_tiktokshop_analysis_csv, write_cdiscount_analysis_csv, write_aliexpress_analysis_csv, write_mercadolibre_analysis_csv
 from mp_agent.infrastructure.ebay import scrape_ebay_products, scrape_ebay_reviews
 from mp_agent.infrastructure.temu import scrape_temu_products, scrape_temu_reviews, _llm_analyze_product as _temu_llm_analyze
 from mp_agent.infrastructure.ozon import scrape_ozon_products, scrape_ozon_reviews
@@ -22,6 +22,7 @@ from mp_agent.infrastructure.allegro import scrape_allegro_products, scrape_alle
 from mp_agent.infrastructure.tiktokshop import scrape_tiktokshop_products, scrape_tiktokshop_reviews, _llm_analyze_product as _tiktokshop_llm_analyze
 from mp_agent.infrastructure.cdiscount import scrape_cdiscount_products, scrape_cdiscount_reviews, _llm_analyze_product as _cdiscount_llm_analyze
 from mp_agent.infrastructure.aliexpress import scrape_aliexpress_products, scrape_aliexpress_reviews, _llm_analyze_product as _aliexpress_llm_analyze
+from mp_agent.infrastructure.mercadolibre import fetch_mercadolibre_products, _llm_analyze_product as _mercadolibre_llm_analyze
 
 
 AMAZON_WORKFLOW_SCHEMA = {
@@ -1372,4 +1373,140 @@ async def run_aliexpress_competitor_analysis(
         "filename": csv_path.name,
         "download_url": download_url_builder(csv_path),
         "summary": f"已完成 {len(rows)} 个 AliExpress 竞品分析",
+    }
+
+
+MERCADOLIBRE_WORKFLOW_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "run_mercadolibre_competitor_analysis",
+        "description": "从本地数据库获取 MercadoLibre 指定品牌商品，生成竞品分析并导出 CSV。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "brand": {"type": "string"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+            "required": ["brand", "count"],
+        },
+    },
+}
+
+
+async def run_mercadolibre_competitor_analysis(
+    brand: str,
+    count: int,
+    emit,
+    *,
+    _skip_cache: bool = False,
+    fetch_products=fetch_mercadolibre_products,
+    build_row_fn=build_analysis_row,
+    write_csv_fn=write_mercadolibre_analysis_csv,
+    download_url_builder=_default_download_url,
+) -> dict:
+    _preview_cols = ["商品id", "价格(MXN)", "评分", "30天销量", "月销售额(MXN)", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "mercadolibre", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_mercadolibre_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
+    await emit({
+        "type": "tool_status",
+        "tool": "run_mercadolibre_competitor_analysis",
+        "message": "正在从本地数据库获取 MercadoLibre 商品...",
+    })
+
+    products = await fetch_products(brand, count)
+    if not products:
+        raise RuntimeError(f"本地数据库中未找到品牌 '{brand}' 的 MercadoLibre 商品")
+
+    rows: list[dict] = []
+    for product in products:
+        product_id = product.get("product_id", "")
+        await emit({
+            "type": "tool_status",
+            "tool": "run_mercadolibre_competitor_analysis",
+            "message": f"正在分析 {product_id} ...",
+        })
+
+        try:
+            review_summary = await _asyncio.to_thread(_mercadolibre_llm_analyze, product)
+        except Exception:
+            review_summary = {"pros": [], "cons": [], "overall": ""}
+
+        ml_product = {**product, "asin": product_id}
+        row = build_row_fn(brand=brand, product=ml_product, review_summary=review_summary)
+        row["商品id"] = product_id
+        row["品牌"] = product.get("brand", "")
+        row["子类目"] = product.get("sub_category", "")
+        row["价格(MXN)"] = product.get("price", "")
+        row["30天销量"] = product.get("sales_30_days", "")
+        row["月销售额(MXN)"] = product.get("revenue", "")
+        row["总销量"] = product.get("total_sales", "")
+        row["销量增长率"] = product.get("sales_growth_rate", "")
+        row["转化率"] = product.get("conversion_rate", "")
+        row["BSR排名"] = product.get("bsr", "")
+        row["库存数量"] = product.get("stock_quantity", "")
+        row["库存类型"] = product.get("stock_type", "")
+        row["店铺类型"] = product.get("store_type", "")
+        row["店铺名称"] = product.get("store_name", "")
+        row["上架日期"] = product.get("launch_date", "")
+
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "mercadolibre",
+                "platform_product_id": str(product_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(str(product.get("price", ""))),
+                "price_original": str(product.get("price", "")),
+                "currency": "MXN",
+                "rating": product.get("rating") or None,
+                "review_count": product.get("review_count") or None,
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "sales_30_days": product.get("sales_30_days"),
+                "total_sales": product.get("total_sales"),
+                "revenue": product.get("revenue"),
+                "sales_growth_rate": product.get("sales_growth_rate"),
+                "bsr": product.get("bsr"),
+                "stock_quantity": product.get("stock_quantity"),
+                "store_type": product.get("store_type"),
+                "conversion_rate": product.get("conversion_rate"),
+            })
+            await save_snapshot(_product_db_id, "mercadolibre", str(product_id), {
+                "title": product.get("title"),
+                "price_usd": _parse_price_usd(str(product.get("price", ""))),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating") or None,
+                "review_count": product.get("review_count") or None,
+                "extra": {
+                    "sales_30_days": product.get("sales_30_days"),
+                    "total_sales": product.get("total_sales"),
+                    "revenue": product.get("revenue"),
+                    "sales_growth_rate": product.get("sales_growth_rate"),
+                },
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass
+        rows.append(row)
+
+    csv_path = write_csv_fn(rows, brand=brand, count=count)
+    return {
+        "platform": "mercadolibre",
+        "brand": brand,
+        "count": count,
+        "rows": rows,
+        "preview_columns": _preview_cols,
+        "preview_rows": [[row.get(col, "") for col in _preview_cols] for row in rows],
+        "filename": csv_path.name,
+        "download_url": download_url_builder(csv_path),
+        "summary": f"已完成 {len(rows)} 个 MercadoLibre 竞品分析",
     }

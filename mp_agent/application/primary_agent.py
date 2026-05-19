@@ -80,6 +80,10 @@ def _normalize_slot_value(key: str, value):
             "aliexpress.com": "aliexpress",
             "速卖通": "aliexpress",
             "全球速卖通": "aliexpress",
+            "mercadolibre": "mercadolibre",
+            "mercadolibre.com": "mercadolibre",
+            "美客多": "mercadolibre",
+            "ml": "mercadolibre",
         }
         return platform_aliases.get(compact, compact)
     if key == "brand":
@@ -257,6 +261,14 @@ def _is_complete_cdiscount_slot_state(slot_state: dict) -> bool:
 def _is_complete_aliexpress_slot_state(slot_state: dict) -> bool:
     return (
         _clean_text(slot_state.get("platform")) == "aliexpress"
+        and _clean_text(slot_state.get("brand")) is not None
+        and _normalize_count(slot_state.get("count")) is not None
+    )
+
+
+def _is_complete_mercadolibre_slot_state(slot_state: dict) -> bool:
+    return (
+        _clean_text(slot_state.get("platform")) == "mercadolibre"
         and _clean_text(slot_state.get("brand")) is not None
         and _normalize_count(slot_state.get("count")) is not None
     )
@@ -454,6 +466,21 @@ def _default_llm_call(messages: list[dict], tools: list[dict]) -> dict:
             "slot_updates": merged_slot_updates,
         }
 
+    if _is_complete_mercadolibre_slot_state(merged_slot_updates):
+        args = {
+            "brand": _clean_text(merged_slot_updates.get("brand")),
+            "count": _normalize_count(merged_slot_updates.get("count")),
+        }
+        if force_refresh:
+            args["_skip_cache"] = True
+        return {
+            "type": "tool_call",
+            "tool_name": "run_mercadolibre_competitor_analysis",
+            "arguments": args,
+            "assistant_message": "",
+            "slot_updates": merged_slot_updates,
+        }
+
     return {
         "type": "assistant",
         "message": parsed_decision.get("message") or _build_missing_slot_message(merged_slot_updates),
@@ -466,11 +493,11 @@ def _build_missing_slot_message(slot_state: dict) -> str:
     brand = _clean_text(slot_state.get("brand"))
     count = _normalize_count(slot_state.get("count"))
 
-    supported = {"amazon", "ebay", "temu", "ozon", "otto", "allegro", "tiktokshop", "cdiscount", "aliexpress"}
+    supported = {"amazon", "ebay", "temu", "ozon", "otto", "allegro", "tiktokshop", "cdiscount", "aliexpress", "mercadolibre"}
     if platform not in (None, *supported):
-        return "目前只支持 Amazon、eBay、Temu、OZON、OTTO、Allegro、TikTok Shop、Cdiscount、AliExpress 竞品分析，请改用其中一个平台。"
+        return "目前只支持 Amazon、eBay、Temu、OZON、OTTO、Allegro、TikTok Shop、Cdiscount、AliExpress、MercadoLibre 竞品分析，请改用其中一个平台。"
     if platform is None:
-        return "你想分析哪个平台？目前我支持 Amazon、eBay、Temu、OZON、OTTO、Allegro、TikTok Shop、Cdiscount 和 AliExpress。"
+        return "你想分析哪个平台？目前我支持 Amazon、eBay、Temu、OZON、OTTO、Allegro、TikTok Shop、Cdiscount、AliExpress 和 MercadoLibre。"
     if brand is None and count is None:
         return "请提供有效的品牌和数量后再试。"
     if brand is None:

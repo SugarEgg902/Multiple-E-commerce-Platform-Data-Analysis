@@ -13,6 +13,7 @@ from mp_agent.application.competitor_workflows import (
     TIKTOKSHOP_WORKFLOW_SCHEMA,
     CDISCOUNT_WORKFLOW_SCHEMA,
     ALIEXPRESS_WORKFLOW_SCHEMA,
+    MERCADOLIBRE_WORKFLOW_SCHEMA,
     run_amazon_competitor_analysis,
     run_ebay_competitor_analysis,
     run_temu_competitor_analysis,
@@ -22,6 +23,7 @@ from mp_agent.application.competitor_workflows import (
     run_tiktokshop_competitor_analysis,
     run_cdiscount_competitor_analysis,
     run_aliexpress_competitor_analysis,
+    run_mercadolibre_competitor_analysis,
 )
 
 
@@ -113,6 +115,13 @@ def build_default_registry() -> WorkflowRegistry:
             name="run_aliexpress_competitor_analysis",
             schema=ALIEXPRESS_WORKFLOW_SCHEMA,
             handler=run_aliexpress_competitor_analysis,
+        )
+    )
+    registry.register(
+        WorkflowTool(
+            name="run_mercadolibre_competitor_analysis",
+            schema=MERCADOLIBRE_WORKFLOW_SCHEMA,
+            handler=run_mercadolibre_competitor_analysis,
         )
     )
     return registry
