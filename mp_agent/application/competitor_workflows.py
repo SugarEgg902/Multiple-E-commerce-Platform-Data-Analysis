@@ -13,7 +13,7 @@ from mp_agent.dao.repository import (
 )
 from mp_agent.dao.matching import schedule_matching
 from mp_agent.infrastructure.amazon import scrape_amazon_products, summarize_reviews
-from mp_agent.infrastructure.artifacts import CSV_COLUMNS, EBAY_CSV_COLUMNS, TEMU_CSV_COLUMNS, OZON_CSV_COLUMNS, OTTO_CSV_COLUMNS, ALLEGRO_CSV_COLUMNS, TIKTOKSHOP_CSV_COLUMNS, CDISCOUNT_CSV_COLUMNS, ALIEXPRESS_CSV_COLUMNS, MERCADOLIBRE_CSV_COLUMNS, write_analysis_csv, write_ebay_analysis_csv, write_temu_analysis_csv, write_ozon_analysis_csv, write_otto_analysis_csv, write_allegro_analysis_csv, write_tiktokshop_analysis_csv, write_cdiscount_analysis_csv, write_aliexpress_analysis_csv, write_mercadolibre_analysis_csv
+from mp_agent.infrastructure.artifacts import CSV_COLUMNS, EBAY_CSV_COLUMNS, TEMU_CSV_COLUMNS, OZON_CSV_COLUMNS, OTTO_CSV_COLUMNS, ALLEGRO_CSV_COLUMNS, TIKTOKSHOP_CSV_COLUMNS, CDISCOUNT_CSV_COLUMNS, ALIEXPRESS_CSV_COLUMNS, MERCADOLIBRE_CSV_COLUMNS, KAUFLAND_CSV_COLUMNS, WORTEN_CSV_COLUMNS, EPRICE_CSV_COLUMNS, write_analysis_csv, write_ebay_analysis_csv, write_temu_analysis_csv, write_ozon_analysis_csv, write_otto_analysis_csv, write_allegro_analysis_csv, write_tiktokshop_analysis_csv, write_cdiscount_analysis_csv, write_aliexpress_analysis_csv, write_mercadolibre_analysis_csv, write_kaufland_analysis_csv, write_worten_analysis_csv, write_eprice_analysis_csv
 from mp_agent.infrastructure.ebay import scrape_ebay_products, scrape_ebay_reviews
 from mp_agent.infrastructure.temu import scrape_temu_products, scrape_temu_reviews, _llm_analyze_product as _temu_llm_analyze
 from mp_agent.infrastructure.ozon import scrape_ozon_products, scrape_ozon_reviews
@@ -23,6 +23,9 @@ from mp_agent.infrastructure.tiktokshop import scrape_tiktokshop_products, scrap
 from mp_agent.infrastructure.cdiscount import scrape_cdiscount_products, scrape_cdiscount_reviews, _llm_analyze_product as _cdiscount_llm_analyze
 from mp_agent.infrastructure.aliexpress import scrape_aliexpress_products, scrape_aliexpress_reviews, _llm_analyze_product as _aliexpress_llm_analyze
 from mp_agent.infrastructure.mercadolibre import fetch_mercadolibre_products, _llm_analyze_product as _mercadolibre_llm_analyze
+from mp_agent.infrastructure.kaufland import scrape_kaufland_products, scrape_kaufland_reviews, _llm_analyze_product as _kaufland_llm_analyze
+from mp_agent.infrastructure.worten import scrape_worten_products, scrape_worten_reviews, _llm_analyze_product as _worten_llm_analyze
+from mp_agent.infrastructure.eprice import scrape_eprice_products, scrape_eprice_reviews, _llm_analyze_product as _eprice_llm_analyze
 
 
 AMAZON_WORKFLOW_SCHEMA = {
@@ -89,8 +92,8 @@ async def _try_serve_from_cache(
     except Exception:
         return None
 
-    if not rows:
-        return None  # 无数据 — 触发重新爬取
+    if not rows or len(rows) < count:
+        return None  # 无数据或数量不足 — 触发重新爬取
 
     try:
         csv_path = await export_platform_csv_from_db(platform, brand, count)
@@ -1105,7 +1108,7 @@ async def run_cdiscount_competitor_analysis(
                 "crawl_time": _dt.utcnow(),
             })
             await save_detail(_product_db_id, {
-                "original_price": product.get("original_price"),
+                "original_price": product.get("striked_price"),
                 "seller": product.get("seller"),
                 "category": product.get("category"),
                 "bullet_points": product.get("bullet_points"),
@@ -1234,6 +1237,7 @@ async def run_aliexpress_competitor_analysis(
                 "discount_percentage": product.get("discount_percentage"),
                 "selling_points": product.get("selling_points"),
                 "is_sponsored": product.get("is_sponsored"),
+                "original_price": product.get("original_price"),
             })
             await save_snapshot(_product_db_id, "aliexpress", str(product_id), {
                 "title": product.get("title"),
@@ -1370,6 +1374,11 @@ async def run_mercadolibre_competitor_analysis(
                 "stock_quantity": product.get("stock_quantity"),
                 "store_type": product.get("store_type"),
                 "conversion_rate": product.get("conversion_rate"),
+                "stock_type": product.get("stock_type"),
+                "store_name": product.get("store_name"),
+                "launch_date": product.get("launch_date"),
+                "sub_category": product.get("sub_category"),
+                "brand": product.get("brand"),
             })
             await save_snapshot(_product_db_id, "mercadolibre", str(product_id), {
                 "title": product.get("title"),
@@ -1401,4 +1410,382 @@ async def run_mercadolibre_competitor_analysis(
         "filename": csv_path.name,
         "download_url": download_url_builder(csv_path),
         "summary": f"已完成 {len(rows)} 个 MercadoLibre 竞品分析",
+    }
+
+
+KAUFLAND_WORKFLOW_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "run_kaufland_competitor_analysis",
+        "description": "在 Kaufland.de 上抓取指定品牌商品、生成竞品分析并导出 CSV。通过 FlareSolverr 绕过 Cloudflare，价格换算为美元。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "brand": {"type": "string"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": ["brand", "count"],
+        },
+    },
+}
+
+
+async def run_kaufland_competitor_analysis(
+    brand: str,
+    count: int,
+    emit,
+    *,
+    _skip_cache: bool = False,
+    scrape_products=scrape_kaufland_products,
+    scrape_reviews_fn=scrape_kaufland_reviews,
+    build_row_fn=build_analysis_row,
+    write_csv_fn=write_kaufland_analysis_csv,
+    download_url_builder=_default_download_url,
+) -> dict:
+    _preview_cols = ["商品id", "价格", "评分", "评论数", "卖家", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "kaufland", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_kaufland_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
+    await emit({"type": "tool_status", "tool": "run_kaufland_competitor_analysis", "message": "正在通过 FlareSolverr 抓取 Kaufland 商品..."})
+
+    products = await scrape_products(brand, max_valid=count)
+    if not products:
+        raise RuntimeError("没有抓取到有效商品")
+
+    new_products = products[:count]
+
+    rows: list[dict] = []
+    for product in new_products:
+        product_id = product.get("product_id", "")
+        product_url = product.get("url", f"https://www.kaufland.de/s/?search_value={brand}")
+        await emit({"type": "tool_status", "tool": "run_kaufland_competitor_analysis",
+                    "message": f"正在分析 {product_id} ..."})
+        try:
+            review_summary = await scrape_reviews_fn(product_id, product_url)
+        except Exception:
+            review_summary = {"pros": [], "cons": [], "overall": ""}
+
+        kaufland_product = {**product, "asin": product_id, "url": product_url}
+        if not review_summary.get("overall"):
+            try:
+                review_summary = await _asyncio.to_thread(_kaufland_llm_analyze, kaufland_product)
+            except Exception:
+                pass
+
+        row = build_row_fn(brand=brand, product=kaufland_product, review_summary=review_summary)
+        row["商品id"] = product_id
+        row["卖家"] = product.get("seller", "")
+        row["评论数"] = product.get("review_count", "")
+        row["卖家数量"] = product.get("seller_count", "")
+        row["库存状态"] = product.get("stock_status", "")
+        row["配送费用"] = product.get("shipping_cost", "")
+        row["规格参数"] = product.get("specs", "")
+
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "kaufland",
+                "platform_product_id": str(product_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": product.get("price_usd"),
+                "price_original": str(product.get("price", "")),
+                "currency": "USD",
+                "rating": product.get("rating") or None,
+                "review_count": product.get("review_count") or None,
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "seller": product.get("seller"),
+                "description": product.get("description"),
+                "bullets": product.get("bullets"),
+                "ean": product.get("ean"),
+                "unit_id": product.get("unit_id"),
+                "specs": product.get("specs"),
+                "stock_status": product.get("stock_status"),
+                "seller_count": product.get("seller_count"),
+                "shipping_cost": product.get("shipping_cost"),
+            })
+            await save_snapshot(_product_db_id, "kaufland", str(product_id), {
+                "title": product.get("title"),
+                "price_usd": product.get("price_usd"),
+                "price_original": str(product.get("price", "")),
+                "rating": product.get("rating") or None,
+                "review_count": product.get("review_count") or None,
+                "extra": {
+                    "seller": product.get("seller"),
+                },
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
+        rows.append(row)
+
+    csv_path = write_csv_fn(rows, brand=brand, count=count)
+    return {
+        "platform": "kaufland",
+        "brand": brand,
+        "count": count,
+        "rows": rows,
+        "preview_columns": _preview_cols,
+        "preview_rows": [[row.get(col, "") for col in _preview_cols] for row in rows],
+        "filename": csv_path.name,
+        "download_url": download_url_builder(csv_path),
+        "summary": f"已完成 {len(rows)} 个 Kaufland 竞品分析",
+    }
+
+
+WORTEN_WORKFLOW_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "run_worten_competitor_analysis",
+        "description": "在 Worten.pt 上抓取指定品牌商品、生成竞品分析并导出 CSV。通过 FlareSolverr 绕过 Cloudflare，价格同时保留 EUR 和 USD。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "brand": {"type": "string"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": ["brand", "count"],
+        },
+    },
+}
+
+
+async def run_worten_competitor_analysis(
+    brand: str,
+    count: int,
+    emit,
+    *,
+    _skip_cache: bool = False,
+    scrape_products=scrape_worten_products,
+    scrape_reviews_fn=scrape_worten_reviews,
+    build_row_fn=build_analysis_row,
+    write_csv_fn=write_worten_analysis_csv,
+    download_url_builder=_default_download_url,
+) -> dict:
+    _preview_cols = ["商品id", "价格(EUR)", "价格(USD)", "评分", "评论数", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "worten", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_worten_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
+    await emit({"type": "tool_status", "tool": "run_worten_competitor_analysis", "message": "正在通过 FlareSolverr 抓取 Worten 商品..."})
+
+    products = await scrape_products(brand, max_valid=count)
+    if not products:
+        raise RuntimeError("没有抓取到有效商品")
+
+    new_products = products[:count]
+
+    rows: list[dict] = []
+    for product in new_products:
+        product_id = product.get("product_id", "")
+        product_url = product.get("url", f"https://www.worten.pt/search?query={brand}")
+        await emit({"type": "tool_status", "tool": "run_worten_competitor_analysis",
+                    "message": f"正在分析 {product_id} ..."})
+        try:
+            review_summary = await scrape_reviews_fn(product_id, product_url)
+        except Exception:
+            review_summary = {"pros": [], "cons": [], "overall": ""}
+
+        worten_product = {**product, "asin": product_id, "url": product_url}
+        if not review_summary.get("overall"):
+            try:
+                review_summary = await _asyncio.to_thread(_worten_llm_analyze, worten_product)
+            except Exception:
+                pass
+
+        row = build_row_fn(brand=brand, product=worten_product, review_summary=review_summary)
+        row["商品id"] = product_id
+        row["品牌"] = product.get("brand", "")
+        row["价格(EUR)"] = product.get("price_eur", "")
+        row["价格(USD)"] = product.get("price", "")
+        row["评分"] = product.get("rating", "")
+        row["评论数"] = product.get("review_count", "")
+        row["库存状态"] = product.get("stock_status", "")
+
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "worten",
+                "platform_product_id": str(product_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": product.get("price_usd"),
+                "price_original": str(product.get("price_eur", "")),
+                "currency": "EUR",
+                "rating": product.get("rating") or None,
+                "review_count": product.get("review_count") or None,
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "brand": product.get("brand"),
+                "description": product.get("description"),
+                "bullets": product.get("bullets"),
+                "stock_status": product.get("stock_status"),
+                "price_usd": product.get("price_usd"),
+            })
+            await save_snapshot(_product_db_id, "worten", str(product_id), {
+                "title": product.get("title"),
+                "price_usd": product.get("price_usd"),
+                "price_original": str(product.get("price_eur", "")),
+                "rating": product.get("rating") or None,
+                "review_count": product.get("review_count") or None,
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
+        rows.append(row)
+
+    csv_path = write_csv_fn(rows, brand=brand, count=count)
+    return {
+        "platform": "worten",
+        "brand": brand,
+        "count": count,
+        "rows": rows,
+        "preview_columns": _preview_cols,
+        "preview_rows": [[row.get(col, "") for col in _preview_cols] for row in rows],
+        "filename": csv_path.name,
+        "download_url": download_url_builder(csv_path),
+        "summary": f"已完成 {len(rows)} 个 Worten 竞品分析",
+    }
+
+
+EPRICE_WORKFLOW_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "run_eprice_competitor_analysis",
+        "description": "在 ePrice.it 上抓取指定品牌商品、生成竞品分析并导出 CSV。通过 FlareSolverr 绕过访问限制，价格同时保留 EUR 和 USD。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "brand": {"type": "string"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": ["brand", "count"],
+        },
+    },
+}
+
+
+async def run_eprice_competitor_analysis(
+    brand: str,
+    count: int,
+    emit,
+    *,
+    _skip_cache: bool = False,
+    scrape_products=scrape_eprice_products,
+    scrape_reviews_fn=scrape_eprice_reviews,
+    build_row_fn=build_analysis_row,
+    write_csv_fn=write_eprice_analysis_csv,
+    download_url_builder=_default_download_url,
+) -> dict:
+    _preview_cols = ["商品id", "价格(EUR)", "价格(USD)", "评分", "评论数", "卖家", "综合分析"]
+    if not _skip_cache:
+        _cached = await _try_serve_from_cache(
+            "eprice", brand, count, emit, _preview_cols, download_url_builder,
+            lambda: run_eprice_competitor_analysis(brand, count, _noop_emit, _skip_cache=True),
+        )
+        if _cached is not None:
+            return _cached
+
+    await emit({"type": "tool_status", "tool": "run_eprice_competitor_analysis", "message": "正在通过 FlareSolverr 抓取 ePrice 商品..."})
+
+    products = await scrape_products(brand, max_valid=count)
+    if not products:
+        raise RuntimeError("没有抓取到有效商品")
+
+    new_products = products[:count]
+
+    rows: list[dict] = []
+    for product in new_products:
+        product_id = product.get("product_id", "")
+        product_url = product.get("url", f"https://www.eprice.it/sa/?qs={brand}")
+        await emit({"type": "tool_status", "tool": "run_eprice_competitor_analysis",
+                    "message": f"正在分析 {product_id} ..."})
+        try:
+            review_summary = await scrape_reviews_fn(product_id, product_url)
+        except Exception:
+            review_summary = {"pros": [], "cons": [], "overall": ""}
+
+        eprice_product = {**product, "asin": product_id, "url": product_url}
+        if not review_summary.get("overall"):
+            try:
+                review_summary = await _asyncio.to_thread(_eprice_llm_analyze, eprice_product)
+            except Exception:
+                pass
+
+        row = build_row_fn(brand=brand, product=eprice_product, review_summary=review_summary)
+        row["商品id"] = product_id
+        row["品牌"] = product.get("brand", "")
+        row["价格(EUR)"] = product.get("price_eur", "")
+        row["价格(USD)"] = product.get("price", "")
+        row["原价(EUR)"] = product.get("original_price_eur", "")
+        row["折扣率"] = f"{product.get('discount_pct')}%" if product.get("discount_pct") else ""
+        row["评分"] = product.get("rating", "")
+        row["评论数"] = product.get("review_count", "")
+        row["卖家"] = product.get("seller", "")
+        row["库存状态"] = product.get("stock_status", "")
+        row["规格参数"] = product.get("specs", "")
+
+        try:
+            _product_db_id = await upsert_product({
+                "platform": "eprice",
+                "platform_product_id": str(product_id),
+                "keyword": brand,
+                "title": product.get("title"),
+                "price_usd": product.get("price_usd"),
+                "price_original": str(product.get("price_eur", "")),
+                "currency": "EUR",
+                "rating": product.get("rating") or None,
+                "review_count": product.get("review_count") or None,
+                "url": product.get("url"),
+                "crawl_time": _dt.utcnow(),
+            })
+            await save_detail(_product_db_id, {
+                "brand": product.get("brand"),
+                "description": product.get("description"),
+                "bullets": product.get("bullets"),
+                "seller": product.get("seller"),
+                "specs": product.get("specs"),
+                "stock_status": product.get("stock_status"),
+                "price_usd": product.get("price_usd"),
+                "original_price_eur": product.get("original_price_eur"),
+                "discount_pct": product.get("discount_pct"),
+            })
+            await save_snapshot(_product_db_id, "eprice", str(product_id), {
+                "title": product.get("title"),
+                "price_usd": product.get("price_usd"),
+                "price_original": str(product.get("price_eur", "")),
+                "rating": product.get("rating") or None,
+                "review_count": product.get("review_count") or None,
+            })
+            await save_analysis_result(_product_db_id, None, row)
+            schedule_matching(_product_db_id, product.get("title", ""))
+        except Exception:
+            pass  # DB unavailable — persist to CSV only
+        rows.append(row)
+
+    csv_path = write_csv_fn(rows, brand=brand, count=count)
+    return {
+        "platform": "eprice",
+        "brand": brand,
+        "count": count,
+        "rows": rows,
+        "preview_columns": _preview_cols,
+        "preview_rows": [[row.get(col, "") for col in _preview_cols] for row in rows],
+        "filename": csv_path.name,
+        "download_url": download_url_builder(csv_path),
+        "summary": f"已完成 {len(rows)} 个 ePrice 竞品分析",
     }

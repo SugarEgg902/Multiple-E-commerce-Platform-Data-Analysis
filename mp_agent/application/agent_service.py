@@ -8,6 +8,7 @@ from mp_agent.application.primary_agent import decide_next_step, summarize_workf
 from mp_agent.application.session_store import SessionStore
 from mp_agent.application.workflow_registry import build_default_registry
 from mp_agent.dao.repository import create_crawl_task, update_crawl_task
+from mp_agent.infrastructure.artifacts import write_multi_platform_analysis_csv
 
 
 SESSION_STORE = SessionStore()
@@ -161,6 +162,16 @@ async def run_session_message(
                 session_store.append_message(session_id, "assistant", decision["assistant_message"])
                 await emit_event(queue, {"type": "assistant", "message": decision["assistant_message"]})
 
+            if decision["type"] == "multi_tool_call":
+                await _run_multi_tool_call(
+                    decision, session_id, queue,
+                    session_store=session_store,
+                    workflow_registry=workflow_registry,
+                    summarize_result_fn=summarize_result_fn,
+                )
+                await emit_event(queue, {"type": "done"})
+                return
+
             _platform = decision["arguments"].get("platform", decision["tool_name"].replace("run_", "").replace("_competitor_analysis", ""))
             _keyword = decision["arguments"].get("brand", "")
             _count = decision["arguments"].get("count", 5)
@@ -207,3 +218,78 @@ async def run_session_message(
             await emit_event(queue, {"type": "done"})
     finally:
         session_store.finish_run(session_id, run_id)
+
+
+async def _run_multi_tool_call(
+    decision: dict,
+    session_id: str,
+    queue: EventQueue,
+    *,
+    session_store: SessionStore,
+    workflow_registry,
+    summarize_result_fn,
+) -> None:
+    tool_calls = decision["tool_calls"]
+    brand = tool_calls[0]["arguments"].get("brand", "") if tool_calls else ""
+    count = tool_calls[0]["arguments"].get("count", 5) if tool_calls else 5
+
+    task_ids: list[int | None] = []
+    for tc in tool_calls:
+        platform = tc["tool_name"].replace("run_", "").replace("_competitor_analysis", "")
+        try:
+            tid = await create_crawl_task(platform, tc["arguments"]["brand"], tc["arguments"]["count"])
+        except Exception:
+            tid = None
+        task_ids.append(tid)
+
+    async def run_one(tc: dict, task_id: int | None) -> dict:
+        platform = tc["tool_name"].replace("run_", "").replace("_competitor_analysis", "")
+        try:
+            result = await workflow_registry.call_tool(
+                tc["tool_name"], tc["arguments"],
+                lambda payload: emit_event(queue, payload),
+            )
+            if task_id is not None:
+                try:
+                    await update_crawl_task(task_id, "done", products_found=result.get("count", count))
+                except Exception:
+                    pass
+            return result
+        except Exception as exc:
+            if task_id is not None:
+                try:
+                    await update_crawl_task(task_id, "failed", error_message=str(exc))
+                except Exception:
+                    pass
+            raise
+
+    raw_results = await asyncio.gather(
+        *[run_one(tc, tid) for tc, tid in zip(tool_calls, task_ids)],
+        return_exceptions=True,
+    )
+
+    platform_rows: list[tuple[str, list[dict]]] = []
+    for tc, result in zip(tool_calls, raw_results):
+        platform = tc["tool_name"].replace("run_", "").replace("_competitor_analysis", "")
+        if isinstance(result, Exception):
+            await emit_event(queue, build_error_event(f"{platform} 分析失败: {result}"))
+        else:
+            rows = result.get("rows") or []
+            platform_rows.append((platform, rows))
+
+    if not platform_rows:
+        return
+
+    merged = await write_multi_platform_analysis_csv(platform_rows, brand, count)
+    await emit_event(queue, build_artifact_event(merged))
+
+    try:
+        final_message = summarize_result_fn("multi_platform", merged)
+    except Exception:
+        final_message = _fallback_summary_message(merged)
+
+    if not isinstance(final_message, str) or not final_message.strip():
+        final_message = _fallback_summary_message(merged)
+
+    session_store.append_message(session_id, "assistant", final_message)
+    await emit_event(queue, {"type": "assistant", "message": final_message})

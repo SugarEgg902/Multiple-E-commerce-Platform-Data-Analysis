@@ -16,6 +16,7 @@ class SessionSlots:
     platform: str | None = None
     brand: str | None = None
     count: int | None = None
+    platforms: list[str] | None = None
 
 
 @dataclass
@@ -58,6 +59,7 @@ class SessionStore:
         platform: str | None = None,
         brand: str | None = None,
         count: int | None = None,
+        platforms: list[str] | None = None,
     ) -> SessionSlots:
         session = self._get_live_session(session_id)
         if platform is not None:
@@ -66,6 +68,8 @@ class SessionStore:
             session.slots.brand = brand
         if count is not None:
             session.slots.count = count
+        if platforms is not None:
+            session.slots.platforms = platforms
         return session.slots
 
     def start_run(self, session_id: str) -> str:

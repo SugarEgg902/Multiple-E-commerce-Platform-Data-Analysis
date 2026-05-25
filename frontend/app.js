@@ -29,6 +29,13 @@
   submitButton.disabled = true;
   bootstrapSession();
 
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
 

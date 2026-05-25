@@ -175,6 +175,110 @@ MERCADOLIBRE_CSV_COLUMNS = [
     "总类目",
 ]
 
+KAUFLAND_CSV_COLUMNS = [
+    "搜索词",
+    "商品id",
+    "url",
+    "商品标题",
+    "价格",
+    "评分",
+    "评论数",
+    "卖家",
+    "卖家数量",
+    "库存状态",
+    "配送费用",
+    "规格参数",
+    "总类目",
+    "核心卖点",
+    "优点评炼",
+    "缺点评炼",
+    "综合分析",
+    "竞品定位",
+]
+
+WORTEN_CSV_COLUMNS = [
+    "搜索词",
+    "商品id",
+    "url",
+    "商品标题",
+    "品牌",
+    "价格(EUR)",
+    "价格(USD)",
+    "评分",
+    "评论数",
+    "库存状态",
+    "核心卖点",
+    "优点评炼",
+    "缺点评炼",
+    "综合分析",
+    "竞品定位",
+]
+
+EPRICE_CSV_COLUMNS = [
+    "搜索词",
+    "商品id",
+    "url",
+    "商品标题",
+    "品牌",
+    "价格(EUR)",
+    "价格(USD)",
+    "原价(EUR)",
+    "折扣率",
+    "评分",
+    "评论数",
+    "卖家",
+    "库存状态",
+    "规格参数",
+    "核心卖点",
+    "优点评炼",
+    "缺点评炼",
+    "综合分析",
+    "竞品定位",
+]
+
+MULTI_PLATFORM_CSV_COLUMNS = [
+    "platform",
+    "搜索词",
+    "商品id",
+    "ASIN",
+    "url",
+    "商品标题",
+    "品牌",
+    "价格",
+    "价格(MXN)",
+    "原价",
+    "折扣率",
+    "评分",
+    "评论数",
+    "卖家",
+    "总类目",
+    "子类目",
+    "Best Sellers Rank",
+    "BSR排名",
+    "月销量区间",
+    "月销量估算值",
+    "月销售额估算",
+    "30天销量",
+    "月销售额(MXN)",
+    "总销量估算",
+    "总销售额估算",
+    "总销量",
+    "总销售额",
+    "卖点",
+    "销量增长率",
+    "转化率",
+    "库存数量",
+    "库存类型",
+    "店铺类型",
+    "店铺名称",
+    "上架日期",
+    "核心卖点",
+    "优点评炼",
+    "缺点评炼",
+    "综合分析",
+    "竞品定位",
+]
+
 
 def _sanitize_brand(brand: str) -> str:
     sanitized = re.sub(r"[^a-z0-9]+", "_", brand.lower()).strip("_")
@@ -370,6 +474,69 @@ def write_mercadolibre_analysis_csv(rows: list[dict], brand: str, count: int, ou
     return path
 
 
+def write_kaufland_analysis_csv(rows: list[dict], brand: str, count: int, output_dir=None) -> Path:
+    output_dir = ARTIFACTS_DIR if output_dir is None else Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_brand = _sanitize_brand(brand)
+    path = output_dir / f"kaufland_{safe_brand}_{count}_{timestamp}.csv"
+
+    suffix = 1
+    while path.exists():
+        path = output_dir / f"kaufland_{safe_brand}_{count}_{timestamp}_{suffix}.csv"
+        suffix += 1
+
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=KAUFLAND_CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in KAUFLAND_CSV_COLUMNS})
+
+    return path
+
+
+def write_worten_analysis_csv(rows: list[dict], brand: str, count: int, output_dir=None) -> Path:
+    output_dir = ARTIFACTS_DIR if output_dir is None else Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_brand = _sanitize_brand(brand)
+    path = output_dir / f"worten_{safe_brand}_{count}_{timestamp}.csv"
+
+    suffix = 1
+    while path.exists():
+        path = output_dir / f"worten_{safe_brand}_{count}_{timestamp}_{suffix}.csv"
+        suffix += 1
+
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=WORTEN_CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in WORTEN_CSV_COLUMNS})
+
+    return path
+
+
+def write_eprice_analysis_csv(rows: list[dict], brand: str, count: int, output_dir=None) -> Path:
+    output_dir = ARTIFACTS_DIR if output_dir is None else Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_brand = _sanitize_brand(brand)
+    path = output_dir / f"eprice_{safe_brand}_{count}_{timestamp}.csv"
+
+    suffix = 1
+    while path.exists():
+        path = output_dir / f"eprice_{safe_brand}_{count}_{timestamp}_{suffix}.csv"
+        suffix += 1
+
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=EPRICE_CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in EPRICE_CSV_COLUMNS})
+
+    return path
+
+
 def write_analysis_csv(rows: list[dict], brand: str, count: int, output_dir=None) -> Path:
     output_dir = ARTIFACTS_DIR if output_dir is None else Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -438,6 +605,43 @@ async def _query_analysis_rows(platform: str, keyword: str, count: int) -> list[
                 "折扣率": f"{extra.get('discount_percentage')}%" if extra.get("discount_percentage") else "",
                 "卖点": "；".join(extra.get("selling_points") or []),
             }
+            if platform == "mercadolibre":
+                row.update({
+                    "30天销量": extra.get("sales_30_days", ""),
+                    "月销售额(MXN)": extra.get("revenue", ""),
+                    "总销量": extra.get("total_sales", ""),
+                    "销量增长率": extra.get("sales_growth_rate", ""),
+                    "转化率": extra.get("conversion_rate", ""),
+                    "BSR排名": extra.get("bsr", ""),
+                    "库存数量": extra.get("stock_quantity", ""),
+                    "库存类型": extra.get("stock_type", ""),
+                    "店铺类型": extra.get("store_type", ""),
+                    "店铺名称": extra.get("store_name", ""),
+                    "上架日期": extra.get("launch_date", ""),
+                    "品牌": extra.get("brand", ""),
+                    "子类目": extra.get("sub_category", ""),
+                    "价格(MXN)": product.price_original or "",
+                })
+            if platform == "worten":
+                price_usd = extra.get("price_usd")
+                row.update({
+                    "价格(EUR)": product.price_original or "",
+                    "价格(USD)": f"${price_usd:.2f}" if price_usd else "",
+                    "品牌": extra.get("brand", ""),
+                    "库存状态": extra.get("stock_status", ""),
+                })
+            if platform == "eprice":
+                price_usd = extra.get("price_usd")
+                row.update({
+                    "价格(EUR)": product.price_original or "",
+                    "价格(USD)": f"${price_usd:.2f}" if price_usd else "",
+                    "原价(EUR)": extra.get("original_price_eur", ""),
+                    "折扣率": f"{extra.get('discount_pct')}%" if extra.get("discount_pct") else "",
+                    "品牌": extra.get("brand", ""),
+                    "卖家": extra.get("seller", ""),
+                    "库存状态": extra.get("stock_status", ""),
+                    "规格参数": extra.get("specs", ""),
+                })
             rows.append(row)
         return rows
 
@@ -453,6 +657,9 @@ _PLATFORM_CSV_COLUMNS = {
     "cdiscount": CDISCOUNT_CSV_COLUMNS,
     "aliexpress": ALIEXPRESS_CSV_COLUMNS,
     "mercadolibre": MERCADOLIBRE_CSV_COLUMNS,
+    "kaufland": KAUFLAND_CSV_COLUMNS,
+    "worten": WORTEN_CSV_COLUMNS,
+    "eprice": EPRICE_CSV_COLUMNS,
 }
 
 
@@ -472,3 +679,59 @@ async def export_platform_csv_from_db(
         writer.writeheader()
         writer.writerows(rows)
     return path
+
+
+_MULTI_PLATFORM_PREVIEW_COLS = [
+    "platform", "商品标题", "价格", "评分", "综合分析", "优点评炼", "缺点评炼", "竞品定位",
+]
+
+
+async def write_multi_platform_analysis_csv(
+    platform_rows: list[tuple[str, list[dict]]],
+    brand: str,
+    count: int,
+    output_dir=None,
+) -> dict:
+    """Merge rows from multiple platforms into a single CSV with a 'platform' column.
+    Only writes columns that have at least one non-empty value across all rows.
+    """
+    output_dir = ARTIFACTS_DIR if output_dir is None else Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_kw = _sanitize_brand(brand)
+    platforms_str = "_".join(p for p, _ in platform_rows)
+    path = output_dir / f"multi_{platforms_str}_{safe_kw}_{count}_{timestamp}.csv"
+
+    all_rows: list[dict] = []
+    for platform, rows in platform_rows:
+        for row in rows:
+            merged = {"platform": platform}
+            for col in MULTI_PLATFORM_CSV_COLUMNS[1:]:
+                merged[col] = row.get(col, "")
+            all_rows.append(merged)
+
+    # Keep only columns that have at least one non-empty value.
+    active_cols = ["platform"] + [
+        col for col in MULTI_PLATFORM_CSV_COLUMNS[1:]
+        if any(str(row.get(col, "")).strip() for row in all_rows)
+    ]
+
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=active_cols, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(all_rows)
+
+    preview_cols = [c for c in _MULTI_PLATFORM_PREVIEW_COLS if c in active_cols]
+    preview_rows = [
+        [row.get(col, "") for col in preview_cols]
+        for row in all_rows[:5]
+    ]
+    return {
+        "summary": f"多平台分析完成，共 {len(all_rows)} 条（{', '.join(p for p, _ in platform_rows)}）",
+        "preview_columns": preview_cols,
+        "preview_rows": preview_rows,
+        "filename": path.name,
+        "download_url": f"/api/download/{path.name}",
+        "count": len(all_rows),
+        "rows": all_rows,
+    }

@@ -14,7 +14,7 @@ _raw_url = os.environ.get("MP_AGENT_DB_URL") or os.environ.get("MP_AGENT_DB_URL_
 if _raw_url:
     db_url = _raw_url.replace("mysql+asyncmy://", "mysql+pymysql://").replace("asyncmy://", "pymysql://")
 else:
-    db_url = "mysql+pymysql://root:password@localhost:3306/mp_agent?charset=utf8mb4"
+    db_url = "mysql+pymysql://root:rootroot@localhost:3306/mp_agent?charset=utf8mb4"
 
 config.set_main_option("sqlalchemy.url", db_url)
 

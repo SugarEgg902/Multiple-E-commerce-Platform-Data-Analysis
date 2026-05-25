@@ -15,6 +15,7 @@ _DB_CONFIG = {
 }
 
 
+
 def _query_products_sync(brand: str, limit: int) -> list[dict]:
     conn = pymysql.connect(**_DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
     try:
@@ -62,6 +63,7 @@ async def fetch_mercadolibre_products(brand: str, count: int) -> list[dict]:
     products = [_map_row(r) for r in rows]
     valid = [p for p in products if p["is_valid"]]
     return valid[:count]
+
 
 
 def _llm_analyze_product(product: dict) -> dict:
